@@ -66,6 +66,25 @@ export function getdheeConfigDir(): string {
   return resolve(homedir(), ".dhee");
 }
 
+/**
+ * Root directory for persisted pi-coding-agent chat sessions.
+ * Sessions are scoped by project slug so each dhee project has its
+ * own append-only JSONL transcript per chat session.
+ *
+ * Layout: <root>/<projectSlug>/<sessionId>.jsonl
+ *
+ * Override via DHEE_PI_SESSIONS_DIR (mostly for tests). Legacy:
+ * KSHANA_PI_SESSIONS_DIR is still honored if set.
+ */
+export function getPiSessionsDir(projectSlug?: string): string {
+  const override =
+    process.env["DHEE_PI_SESSIONS_DIR"] ?? process.env["KSHANA_PI_SESSIONS_DIR"];
+  const root = override
+    ? resolve(expandTilde(override))
+    : resolve(getdheeConfigDir(), "pi-sessions");
+  return projectSlug ? resolve(root, projectSlug) : root;
+}
+
 export function ensureDir(path: string): string {
   if (!existsSync(path)) {
     mkdirSync(path, { recursive: true });

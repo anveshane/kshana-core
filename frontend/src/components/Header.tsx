@@ -15,10 +15,11 @@ interface HeaderProps {
   onProviderSettings: () => void
   onWorkflows: () => void
   onStop?: () => void
+  onClearChat?: () => void
   projectSelector?: React.ReactNode
 }
 
-export function Header({ onProviderSettings, onWorkflows, onStop, projectSelector }: HeaderProps) {
+export function Header({ onProviderSettings, onWorkflows, onStop, onClearChat, projectSelector }: HeaderProps) {
   const { connectionStatus, selectedProject, phase, contextUsage, autonomousMode, parallelMedia, agentStatus, timer } = useAppState()
 
   // Live tick when timer is running — re-render every second
@@ -113,6 +114,23 @@ export function Header({ onProviderSettings, onWorkflows, onStop, projectSelecto
           )}
 
           {/* Action buttons */}
+          {onClearChat && (
+            <button
+              onClick={() => {
+                if (typeof window !== 'undefined') {
+                  const ok = window.confirm(
+                    'Clear chat history? This deletes the saved transcript on disk and starts a new session.',
+                  )
+                  if (!ok) return
+                }
+                onClearChat()
+              }}
+              className="font-mono text-xs px-3 py-1.5 rounded-md border border-line-soft text-graphite-100 hover:text-foreground hover:border-line-strong transition-colors cursor-pointer"
+              title="Wipe persisted chat history and start a fresh session"
+            >
+              New chat
+            </button>
+          )}
           <button
             onClick={onProviderSettings}
             className="font-mono text-xs px-3 py-1.5 rounded-md border border-line-soft text-graphite-100 hover:text-foreground hover:border-line-strong transition-colors cursor-pointer"

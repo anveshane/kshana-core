@@ -13,7 +13,7 @@
 import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync, unlinkSync, statSync, renameSync } from 'fs';
 import { join, dirname, relative } from 'path';
 import { TypedEventEmitter } from '../../events/EventEmitter.js';
-import { LLMClient } from '../llm/index.js';
+import type { LLMClient } from '../llm/index.js';
 import type { Message, GenerateOptions } from '../llm/types.js';
 import { buildRouterFromEnv, type LLMRouter, type LLMPurpose } from '../llm/index.js';
 import type { GenericAgentResult } from '../agent/AgentResult.js';
@@ -44,7 +44,10 @@ import {
   type AvailableRefMinimal,
 } from './shotImagePromptNormalizer.js';
 import { extractCollectionItems } from './collectionExtractor.js';
-import { extractStoryEssence, type StoryEssence } from './storyEssenceExtractor.js';
+import { extractStoryEssence, StoryEssenceParseError, type StoryEssence } from './storyEssenceExtractor.js';
+import { buildFailedNodesNotification } from './buildFailedNodesNotification.js';
+import { findBlockingFailures, shouldAwaitPendingMediaOnExit } from './executorTermination.js';
+import { writeFailedAttempt, clearFailedAttempt } from './writeFailedAttempt.js';
 import { buildStoryEssenceBlock } from './storyEssenceContextBlock.js';
 import { canonicalShotVideoDeps, sanitizeShotVideoDeps } from './shotVideoCanonicalDeps.js';
 import { syncSceneArtifacts } from './syncSceneArtifacts.js';
@@ -315,6 +318,29 @@ export class ExecutorAgent extends TypedEventEmitter {
   private lockFilePath: string;
   private currentPhase = '';
   private retriedNodes = new Set<string>();
+  /**
+   * Last error captured by a helper (executeStoryEssenceNode, executeShotImage,
+   * executeFinalAssembly, etc.) before it returned null. The run-loop dispatch
+   * site reads this when calling `executor.markFailed`, so the user-facing
+   * notification + summary surfaces the *actual* failure ("402 Credits exhausted",
+   * "ComfyUI: workflow not found", etc.) rather than a generic
+   * "Story essence extraction failed". Cleared on consumption so a subsequent
+   * unrelated failure doesn't inherit the previous error.
+   */
+  private lastNodeError: string | null = null;
+
+  /**
+   * Read and clear `lastNodeError`. Call sites use this when invoking
+   * `executor.markFailed` so the actual cause (set by the helper that
+   * returned null) reaches the user-facing notification + summary.
+   * Falls back to the supplied generic string if no helper captured
+   * an error.
+   */
+  private consumeLastNodeError(fallback: string): string {
+    const captured = this.lastNodeError;
+    this.lastNodeError = null;
+    return captured && captured.trim().length > 0 ? captured : fallback;
+  }
   /** Pending media generation promises (parallel mode) */
   private pendingMedia = new Map<string, Promise<string | null>>();
   /** prompt_relay mode: shot_video nodes for the same scene share one
@@ -882,14 +908,58 @@ export class ExecutorAgent extends TypedEventEmitter {
 
   /**
    * Stop the agent mid-execution.
+   *
+   * Two cancellation channels fire in parallel:
+   *
+   * 1. **Server-side**: `ComfyUIClient.interrupt()` tells ComfyUI to
+   *    abort the active prompt. We don't await it indefinitely — when
+   *    the proxy is glitchy (typical 502 spike) the RPC can hang for
+   *    many seconds. A 5s race timeout keeps `stop()` snappy and
+   *    surfaces a debug log when the interrupt didn't land.
+   *
+   * 2. **Client-side**: `abortAllInFlightWorkflows()` closes any
+   *    `queueAndWaitWS` WebSockets opened by this process and rejects
+   *    their pending promises with `Error('aborted')`. Without this,
+   *    a ComfyUI client blocked on a WebSocket waiting for an
+   *    `execution_success` frame from a server that has already gone
+   *    silent (interrupted, 502'd, network blip) had no way out —
+   *    `stop()` returned but the run loop's `await` was still parked
+   *    upstream, and the BackgroundTaskRunner stayed in 'running'
+   *    state for a long time after the user clicked Stop.
    */
   stop(): void {
     this.stopped = true;
     this.stopReason = 'cancelled';
-    // Interrupt any in-progress ComfyUI generation immediately
-    import('../../services/comfyui/ComfyUIClient.js')
-      .then(({ ComfyUIClient }) => new ComfyUIClient({}).interrupt())
-      .catch(() => {});
+
+    // Channel 1 — server-side interrupt with a 5s timeout race so a
+    // hanging RPC doesn't keep the cancel pending indefinitely.
+    void import('../../services/comfyui/ComfyUIClient.js').then(
+      ({ ComfyUIClient, abortAllInFlightWorkflows }) => {
+        const interruptPromise = new ComfyUIClient({}).interrupt();
+        const timeout = new Promise<'timeout'>((resolve) =>
+          setTimeout(() => resolve('timeout'), 5000),
+        );
+        Promise.race([interruptPromise.then(() => 'ok' as const), timeout])
+          .then((outcome) => {
+            if (outcome === 'timeout') {
+              this.log(
+                `[stop] ComfyUI /interrupt RPC timed out after 5s — server may be unreachable`,
+              );
+            }
+          })
+          .catch((err) => {
+            this.log(`[stop] ComfyUI /interrupt failed: ${(err as Error).message}`);
+          });
+
+        // Channel 2 — close any in-flight WS so awaiters bail
+        // immediately. Synchronous; doesn't depend on the server
+        // responding to the interrupt.
+        const closed = abortAllInFlightWorkflows('agent.stop()');
+        if (closed > 0) {
+          this.log(`[stop] aborted ${closed} in-flight ComfyUI WebSocket(s)`);
+        }
+      },
+    ).catch(() => {});
   }
 
   /**
@@ -1149,7 +1219,7 @@ export class ExecutorAgent extends TypedEventEmitter {
 
     if (sceneNodes.length === 0) return;
 
-    const totalDuration = (this.config.goal.preferences.duration as number | undefined) ?? 30;
+    const totalDuration = (this.config.goal.preferences.duration) ?? 30;
     const descriptors: SegmentDescriptor[] = sceneNodes.map(n => ({
       id: n.itemId ?? n.id,
       label: n.displayName,
@@ -2058,6 +2128,30 @@ export class ExecutorAgent extends TypedEventEmitter {
         await this.expandPendingCollections();
         this.ensureTimelineInitialized();
         this.reconcileCompletedSceneTimelineSegments();
+
+        // Permanent-failure short-circuit: if a node is `failed` AND its
+        // dependents are still `pending` (or `in_progress`), the run has
+        // no path to completion. Without this check we'd keep working on
+        // unrelated branches until eventually the serial-mode deadlock
+        // detector fires ~6s later with a useless "Pipeline deadlocked"
+        // message. Surface the actual failure(s) immediately instead.
+        // This runs every loop tick (cheap) before we even compute ready
+        // nodes — by the time we'd ask for ready work, we already know
+        // the run is dead.
+        const blockers = findBlockingFailures(this.executor.getAllNodes());
+        if (blockers.length > 0 && !this.redoOnlyNodes) {
+          this.log(
+            `STOPPING: ${blockers.length} permanently-failed node(s) blocking downstream content: ${blockers.map(n => n.id).join(', ')}`,
+          );
+          this.emit({
+            type: 'notification',
+            level: 'error',
+            message: buildFailedNodesNotification(blockers, MAX_SELF_REPAIRS),
+          });
+          this.stopReason = 'failed';
+          break;
+        }
+
         let readyNodes = this.executor.getNextReady();
 
         // Isolated-redo mode: a redoNode() call set a whitelist of nodes.
@@ -2110,7 +2204,7 @@ export class ExecutorAgent extends TypedEventEmitter {
               this.emit({
                 type: 'notification',
                 level: 'error',
-                message: `${failedNodes.length} node(s) failed after retries: ${failedNodes.map(n => n.displayName).join(', ')}. Send any message to retry.`,
+                message: buildFailedNodesNotification(failedNodes, MAX_SELF_REPAIRS),
               });
               this.stopReason = 'failed';
               break;
@@ -2325,7 +2419,7 @@ export class ExecutorAgent extends TypedEventEmitter {
               // Final assembly — skip LLM, go straight to deterministic assembly
               const assemblyResult = await this.executeFinalAssembly(node, toolCallId);
               if (!assemblyResult) {
-                this.executor.markFailed(node.id, 'Final assembly failed');
+                this.executor.markFailed(node.id, this.consumeLastNodeError('Final assembly failed'));
                 return;
               }
               finalOutputPath = assemblyResult;
@@ -2340,7 +2434,7 @@ export class ExecutorAgent extends TypedEventEmitter {
               // Shot video — purely deterministic: take shot image + motion → video provider
               const videoResult = await this.executeShotVideo(node, toolCallId);
               if (!videoResult) {
-                this.executor.markFailed(node.id, 'Shot video generation failed');
+                this.executor.markFailed(node.id, this.consumeLastNodeError('Shot video generation failed'));
                 return;
               }
               finalOutputPath = videoResult;
@@ -2357,7 +2451,7 @@ export class ExecutorAgent extends TypedEventEmitter {
               // Shot image — deterministic: read prompt JSON, resolve refs, call ComfyUI
               const shotImageResult = await this.executeShotImage(node, toolCallId);
               if (!shotImageResult) {
-                this.executor.markFailed(node.id, 'Shot image generation failed');
+                this.executor.markFailed(node.id, this.consumeLastNodeError('Shot image generation failed'));
                 return;
               }
               finalOutputPath = shotImageResult;
@@ -2479,7 +2573,7 @@ export class ExecutorAgent extends TypedEventEmitter {
             } else if (node.typeId === 'story_essence') {
               const essenceResult = await this.executeStoryEssenceNode(node, toolCallId, agentName);
               if (!essenceResult) {
-                this.executor.markFailed(node.id, 'Story essence extraction failed');
+                this.executor.markFailed(node.id, this.consumeLastNodeError('Story essence extraction failed'));
                 this.persistState();
                 this.emitTodoUpdate();
                 return;
@@ -2545,7 +2639,7 @@ export class ExecutorAgent extends TypedEventEmitter {
                     if (mediaPath) {
                       finalOutputPath = mediaPath;
                     } else {
-                      this.executor.markFailed(node.id, 'Media generation failed (prompt saved, will retry)');
+                      this.executor.markFailed(node.id, this.consumeLastNodeError('Media generation failed (prompt saved, will retry)'));
                       this.emitTodoUpdate();
                       return;
                     }
@@ -2611,6 +2705,19 @@ export class ExecutorAgent extends TypedEventEmitter {
                 }
                 if (!validation.valid) {
                   this.log(`  JSON validation failed: ${validation.error} — asking LLM to fix...`);
+                  // Persist the first broken attempt to the .failed sidecar
+                  // immediately, so it's visible in the project tree while
+                  // the repair / retry path runs. If repair or retry
+                  // succeeds we delete it (the file lifecycle mirrors the
+                  // node's actual state); if both fail, we re-write it
+                  // with the FINAL broken content below.
+                  writeFailedAttempt(
+                    node,
+                    content,
+                    validation.error ?? 'unknown validation error',
+                    this.config.projectDir,
+                    this.config.template,
+                  );
                   this.emit({
                     type: 'notification',
                     level: 'warning',
@@ -2653,6 +2760,10 @@ export class ExecutorAgent extends TypedEventEmitter {
                   if (fixValidation.valid) {
                     content = fixValidation.normalizedContent ?? fixedContent;
                     this.log(`  LLM JSON repair succeeded`);
+                    // Repair worked — drop the .failed sidecar we wrote
+                    // above so the project tree doesn't carry a stale
+                    // "broken" marker next to the now-good artefact.
+                    clearFailedAttempt(node, this.config.projectDir, this.config.template);
                     this.emit({
                       type: 'tool_result',
                       toolCallId: repairCallId,
@@ -2694,9 +2805,32 @@ export class ExecutorAgent extends TypedEventEmitter {
                     if (retryValidation.valid) {
                       content = retryValidation.normalizedContent ?? retryContent;
                       this.log(`  Full retry succeeded — valid JSON`);
+                      // Retry worked — drop the .failed sidecar we wrote
+                      // on first failure (same rationale as the repair
+                      // success branch above).
+                      clearFailedAttempt(node, this.config.projectDir, this.config.template);
                     } else {
                       this.log(`  Full retry also failed: ${retryValidation.error}`);
-                      this.executor.markFailed(node.id, `Invalid JSON output after retry: ${retryValidation.error}`);
+                      // Persist the broken content so the user can inspect /
+                      // hand-edit / rename to recover, instead of fishing
+                      // through llm-calls.log. Path mirrors the artifact's
+                      // resolved output path with a `.failed` suffix; a
+                      // companion `.failed.error` carries the validator
+                      // message so they don't have to re-read the chat.
+                      const sidecar = writeFailedAttempt(
+                        node,
+                        retryContent,
+                        retryValidation.error ?? 'unknown validation error',
+                        this.config.projectDir,
+                        this.config.template,
+                      );
+                      const recoveryHint = sidecar.contentPath
+                        ? `\nBroken content saved to: ${sidecar.contentPath} — edit and rename to remove the .failed suffix to recover, or send any message to retry.`
+                        : '';
+                      this.executor.markFailed(
+                        node.id,
+                        `Invalid JSON output after retry: ${retryValidation.error}${recoveryHint}`,
+                      );
                       this.emitTodoUpdate();
                       return;
                     }
@@ -2709,6 +2843,9 @@ export class ExecutorAgent extends TypedEventEmitter {
                 node, content, this.config.projectDir, this.config.template,
               );
               this.log(`  Written to: ${outputPath}`);
+              // Clean up any stale .failed sidecar from a prior failed
+              // run of this same node. Idempotent — no-op when none exists.
+              clearFailedAttempt(node, this.config.projectDir, this.config.template);
 
               // Record the prompt path in project.json for media nodes so a
               // later run can legitimately skip LLM regeneration (crash
@@ -2746,7 +2883,7 @@ export class ExecutorAgent extends TypedEventEmitter {
                         this.log(`  [parallel] Media ready: ${node.id} → ${mediaPath}`);
                       } else {
                         // Media failed — mark as failed so it doesn't pollute downstream
-                        this.executor.markFailed(node.id, 'Media generation failed (prompt saved)');
+                        this.executor.markFailed(node.id, this.consumeLastNodeError('Media generation failed (prompt saved)'));
                         this.persistState();
                         this.emitTodoUpdate();
                         this.log(`  [parallel] Media failed: ${node.id} — prompt at ${capturedOutputPath}`);
@@ -2772,7 +2909,7 @@ export class ExecutorAgent extends TypedEventEmitter {
                   } else {
                     // Media generation failed — node should NOT be marked completed
                     // The prompt file is preserved so retry will skip LLM and go straight to image gen
-                    this.executor.markFailed(node.id, 'Media generation failed (prompt saved, will retry)');
+                    this.executor.markFailed(node.id, this.consumeLastNodeError('Media generation failed (prompt saved, will retry)'));
                     this.emitTodoUpdate();
                     this.log(`  Media gen failed for ${node.id} — marked failed, prompt preserved at ${outputPath}`);
                     return;
@@ -2900,10 +3037,20 @@ export class ExecutorAgent extends TypedEventEmitter {
         }
       }
 
-      // Await any remaining pending media before finalizing
+      // Await any remaining pending media before finalizing — but only
+      // when the run is exiting cleanly. On a `failed` or `cancelled`
+      // exit, awaiting risks hanging forever on a stuck media gen
+      // (ComfyUI request that never returns) which keeps the chat UI
+      // pinned to "running" indefinitely. Drop the references; whatever
+      // is in flight will resolve into the void or be aborted by the
+      // controller signal upstream.
       if (this.pendingMedia.size > 0) {
-        this.log(`Awaiting ${this.pendingMedia.size} final pending media generation(s)...`);
-        await Promise.all(this.pendingMedia.values());
+        if (shouldAwaitPendingMediaOnExit(this.stopReason)) {
+          this.log(`Awaiting ${this.pendingMedia.size} final pending media generation(s)...`);
+          await Promise.all(this.pendingMedia.values());
+        } else {
+          this.log(`Skipping ${this.pendingMedia.size} pending media await (stopReason=${this.stopReason}) to avoid hanging finalize`);
+        }
         this.pendingMedia.clear();
       }
 
@@ -3004,8 +3151,8 @@ export class ExecutorAgent extends TypedEventEmitter {
     }
 
     // Inject duration/project constraints with per-scene and per-shot specifics
-    const duration = this.config.goal.preferences.duration as number | undefined;
-    const style = this.config.goal.preferences.style as string | undefined;
+    const duration = this.config.goal.preferences.duration;
+    const style = this.config.goal.preferences.style;
     const allNodes = this.executor.getAllNodes();
     const sceneCount = allNodes.filter(n => n.typeId === 'scene').length;
     // Prefer the duration-first extractor's per-scene estimate over the
@@ -3307,11 +3454,11 @@ Examples of common failure modes to avoid:
             const allCharacters = this.executor.getAllNodes()
               .filter((n: any) => n.typeId === 'character' && n.itemId);
             const sceneCharacters = sceneCharRefIds.length > 0
-              ? allCharacters.filter((n: any) => sceneCharRefIds.includes(n.itemId!))
+              ? allCharacters.filter((n: any) => sceneCharRefIds.includes(n.itemId))
               : allCharacters; // Fallback: if parse failed, use everyone (legacy behavior)
             const charInits = sceneCharacters.map((n: any) => ({
               refId: n.itemId!,
-              kind: this.inferCharacterKind(n.itemId!),
+              kind: this.inferCharacterKind(n.itemId),
             }));
             const settingNode = this.executor.getAllNodes()
               .find((n: any) => n.typeId === 'setting_image' && n.itemId);
@@ -3437,7 +3584,7 @@ Examples of common failure modes to avoid:
               // mid-shot, which still need tagging if first_frame has them.
               const frames = shotJson.frames ?? {};
               const charRefIds = new Set<string>();
-              for (const f of Object.values(frames) as any[]) {
+              for (const f of Object.values(frames) as Array<{ references?: Array<{ type?: string; refId?: string }> }>) {
                 for (const r of f?.references ?? []) {
                   if (r?.type === 'character' && typeof r.refId === 'string') {
                     const itemId = r.refId.replace(/^character_image:/, '');
@@ -4086,7 +4233,7 @@ Examples of common failure modes to avoid:
             if (existsSync(fullPath)) {
               try {
                 const content = readFileSync(fullPath, 'utf-8');
-                let itemList: Array<{ itemId: string; name: string }> = [];
+                const itemList: Array<{ itemId: string; name: string }> = [];
 
                 // Parse scene numbers from content patterns like "SCENE 1:", "## Scene 2", etc.
                 if (dep.artifactTypeId === 'scene' || dep.artifactTypeId === 'story') {
@@ -4193,7 +4340,7 @@ Examples of common failure modes to avoid:
                     const allSettingImages = this.executor.getAllNodes()
                       .filter(n => n.typeId === 'setting_image' && n.itemId).map(n => n.id);
                     let prevShotImageId: string | null = null;
-                    let prevShotVideoId2: string | null = null;
+                    const prevShotVideoId2: string | null = null;
                     for (const shot of shotItems) {
                       const shotImageId = `shot_image:${shot.itemId}`;
                       const shotImageLastFrameId = `shot_image_last_frame:${shot.itemId}`;
@@ -4248,7 +4395,7 @@ Examples of common failure modes to avoid:
         //      (last-resort fallback if neither of the above is found).
         if (!didExpand && typeDef.dependencies.some(d => d.artifactTypeId === 'story')) {
           let storyContent: string | null = null;
-          let storyContextNode = allNodes.find(n => n.typeId === 'story' && n.status === 'completed' && n.outputPath);
+          const storyContextNode = allNodes.find(n => n.typeId === 'story' && n.status === 'completed' && n.outputPath);
           if (storyContextNode?.outputPath) {
             const p = join(this.config.projectDir, storyContextNode.outputPath);
             if (existsSync(p)) {
@@ -4279,7 +4426,7 @@ Examples of common failure modes to avoid:
             try {
               const extracted = await extractCollectionItems(
                 ctxNode, storyContent, this.llmFor('structured.collection_extraction'),
-                this.config.goal.preferences.duration as number | undefined,
+                this.config.goal.preferences.duration,
                 this.storyEssence ?? undefined,
               );
                 let itemList: Array<{ itemId: string; name: string }> = [];
@@ -4388,7 +4535,7 @@ Examples of common failure modes to avoid:
           if (!existsSync(fullPath)) continue;
 
           const content = readFileSync(fullPath, 'utf-8');
-          const items = await extractCollectionItems(dep, content, this.llmFor('structured.collection_extraction'), this.config.goal.preferences.duration as number | undefined);
+          const items = await extractCollectionItems(dep, content, this.llmFor('structured.collection_extraction'), this.config.goal.preferences.duration);
           if (!items?.shots?.length) continue;
 
           const sceneId = dep.itemId;
@@ -5347,7 +5494,7 @@ Examples of common failure modes to avoid:
       toolName: 'extract_collections',
     });
 
-    const items = await extractCollectionItems(node, content, this.llmFor('structured.collection_extraction'), this.config.goal.preferences.duration as number | undefined);
+    const items = await extractCollectionItems(node, content, this.llmFor('structured.collection_extraction'), this.config.goal.preferences.duration);
 
     if (!items) {
       this.log(`  No collection items extracted from ${node.id}`);
@@ -5509,7 +5656,9 @@ Examples of common failure modes to avoid:
     const fullPromptPath = join(projectDir, promptFilePath);
 
     if (!existsSync(fullPromptPath)) {
-      this.log(`  Media gen: prompt file not found: ${fullPromptPath}`);
+      const msg = `prompt file not found: ${fullPromptPath}`;
+      this.log(`  Media gen: ${msg}`);
+      this.lastNodeError = `Media gen: ${msg}`;
       return null;
     }
 
@@ -5517,7 +5666,9 @@ Examples of common failure modes to avoid:
     try {
       const provider = getProviderRegistry().getImageGenerator();
       if (!provider) {
-        this.log(`  Media gen: no image generation provider configured`);
+        const msg = 'no image generation provider configured';
+        this.log(`  Media gen: ${msg}`);
+        this.lastNodeError = `Media gen: ${msg}`;
         this.emit({
           type: 'notification',
           level: 'warning',
@@ -5526,7 +5677,9 @@ Examples of common failure modes to avoid:
         return null;
       }
     } catch (err) {
-      this.log(`  Media gen: provider check failed: ${String(err)}`);
+      const errStr = String(err);
+      this.log(`  Media gen: provider check failed: ${errStr}`);
+      this.lastNodeError = `Media gen: provider check failed (${errStr})`;
       this.emit({
         type: 'notification',
         level: 'warning',
@@ -6220,7 +6373,7 @@ Examples of common failure modes to avoid:
         reference_images: hasRefs ? resolvedRefs : undefined,
       });
 
-      if (progressHandler) comfyProgressBus.offProgress(progressHandler!);
+      if (progressHandler) comfyProgressBus.offProgress(progressHandler);
 
       const job = mediaJobs.get(result.jobId);
       let filePath = job?.result?.path;
@@ -6416,20 +6569,24 @@ Examples of common failure modes to avoid:
         });
         return filePath;
       } else {
-        if (progressHandler) comfyProgressBus.offProgress(progressHandler!);
-        this.log(`  Shot image failed: ${result.error ?? job?.error}`);
+        if (progressHandler) comfyProgressBus.offProgress(progressHandler);
+        const errStr = String(result.error ?? job?.error ?? 'unknown ComfyUI error');
+        this.log(`  Shot image failed: ${errStr}`);
+        this.lastNodeError = `Shot image: ${errStr}`;
         this.emit({
           type: 'tool_result',
           toolCallId: genCallId,
           toolName,
-          result: { status: 'error', error: result.error ?? job?.error },
+          result: { status: 'error', error: errStr },
           agentName,
           isError: true,
         });
         return null;
       }
     } catch (error) {
-      this.log(`  Shot image error: ${String(error)}`);
+      const errStr = String(error);
+      this.log(`  Shot image error: ${errStr}`);
+      this.lastNodeError = `Shot image: ${errStr}`;
       return null;
     }
   }
@@ -6552,7 +6709,7 @@ Examples of common failure modes to avoid:
       });
 
       // Unsubscribe from progress
-      if (progressHandler) comfyProgressBus.offProgress(progressHandler!);
+      if (progressHandler) comfyProgressBus.offProgress(progressHandler);
 
       // Get the result from the job store
       const job = mediaJobs.get(result.jobId);
@@ -6578,8 +6735,9 @@ Examples of common failure modes to avoid:
         });
         return filePath;
       } else {
-        const error = result.error ?? job?.error ?? 'Unknown error';
+        const error = String(result.error ?? job?.error ?? 'Unknown error');
         this.log(`  Image generation failed: ${error}`);
+        this.lastNodeError = `Image generation: ${error}`;
         this.emit({
           type: 'tool_result',
           toolCallId: genCallId,
@@ -6591,13 +6749,15 @@ Examples of common failure modes to avoid:
         return null;
       }
     } catch (error) {
-      if (progressHandler) comfyProgressBus.offProgress(progressHandler!);
-      this.log(`  Image generation error: ${String(error)}`);
+      if (progressHandler) comfyProgressBus.offProgress(progressHandler);
+      const errStr = String(error);
+      this.log(`  Image generation error: ${errStr}`);
+      this.lastNodeError = `Image generation: ${errStr}`;
       this.emit({
         type: 'tool_result',
         toolCallId: genCallId,
         toolName,
-        result: { status: 'error', error: String(error) },
+        result: { status: 'error', error: errStr },
         agentName,
         isError: true,
       });
@@ -6835,7 +6995,7 @@ Examples of common failure modes to avoid:
       const provider = getProviderRegistry().getVideoGenerator();
       if (!provider?.generateVideo) {
         this.log(`  No video generation provider available`);
-        if (progressHandler) comfyProgressBus.offProgress(progressHandler!);
+        if (progressHandler) comfyProgressBus.offProgress(progressHandler);
         return null;
       }
 
@@ -6897,7 +7057,7 @@ Examples of common failure modes to avoid:
         },
       );
 
-      if (progressHandler) comfyProgressBus.offProgress(progressHandler!);
+      if (progressHandler) comfyProgressBus.offProgress(progressHandler);
 
       const relPath = relative(this.config.projectDir, result.filePath);
       const workflowUsed = (result.metadata as Record<string, unknown>)?.['workflowName'] as string | undefined;
@@ -6931,13 +7091,15 @@ Examples of common failure modes to avoid:
       });
       return relPath;
     } catch (error) {
-      if (progressHandler) comfyProgressBus.offProgress(progressHandler!);
-      this.log(`  Shot video error: ${String(error)}`);
+      if (progressHandler) comfyProgressBus.offProgress(progressHandler);
+      const errStr = String(error);
+      this.log(`  Shot video error: ${errStr}`);
+      this.lastNodeError = `Shot video: ${errStr}`;
       this.emit({
         type: 'tool_result',
         toolCallId: genCallId,
         toolName,
-        result: { status: 'error', error: String(error) },
+        result: { status: 'error', error: errStr },
         agentName,
         isError: true,
       });
@@ -7230,12 +7392,16 @@ Examples of common failure modes to avoid:
   ): Promise<string | null> {
     const storyNode = this.executor.getAllNodes().find(n => n.typeId === 'story' && n.status === 'completed');
     if (!storyNode?.outputPath) {
-      this.log(`  story_essence: cannot find completed story node with outputPath`);
+      const msg = 'cannot find completed story node with outputPath';
+      this.log(`  story_essence: ${msg}`);
+      this.lastNodeError = `Story essence: ${msg}`;
       return null;
     }
     const storyAbs = join(this.config.projectDir, storyNode.outputPath);
     if (!existsSync(storyAbs)) {
-      this.log(`  story_essence: story file missing on disk: ${storyAbs}`);
+      const msg = `story file missing on disk: ${storyAbs}`;
+      this.log(`  story_essence: ${msg}`);
+      this.lastNodeError = `Story essence: ${msg}`;
       return null;
     }
 
@@ -7243,7 +7409,9 @@ Examples of common failure modes to avoid:
     try {
       storyContent = readFileSync(storyAbs, 'utf-8');
     } catch (err) {
-      this.log(`  story_essence: failed to read story: ${(err as Error).message}`);
+      const msg = (err as Error).message;
+      this.log(`  story_essence: failed to read story: ${msg}`);
+      this.lastNodeError = `Story essence: failed to read story (${msg})`;
       return null;
     }
 
@@ -7258,21 +7426,44 @@ Examples of common failure modes to avoid:
 
     let essence: StoryEssence;
     try {
-      const targetDurationSec = this.config.goal.preferences.duration as number | undefined;
+      const targetDurationSec = this.config.goal.preferences.duration;
       essence = await extractStoryEssence(storyContent, this.llmFor('structured.story_essence'), {
         ...(typeof targetDurationSec === 'number' ? { targetDurationSec } : {}),
       });
     } catch (err) {
-      this.log(`  story_essence: extraction failed: ${(err as Error).message}`);
+      const msg = (err as Error).message;
+      this.log(`  story_essence: extraction failed: ${msg}`);
+      // When the failure is a parse / validation error from the LLM
+      // response, the StoryEssenceParseError carries the raw content
+      // that failed — persist it so the user can inspect / hand-fix
+      // the JSON. Other failures (LLM transport errors, timeouts) have
+      // no content to save.
+      let recoveryHint = '';
+      if (err instanceof StoryEssenceParseError) {
+        const sidecar = writeFailedAttempt(
+          node,
+          err.rawContent,
+          msg,
+          this.config.projectDir,
+          this.config.template,
+        );
+        if (sidecar.contentPath) {
+          recoveryHint = `\nBroken content saved to: ${sidecar.contentPath} — edit and rename to remove the .failed suffix to recover, or send any message to retry.`;
+        }
+      }
+      this.lastNodeError = `${msg}${recoveryHint}`;
       this.emit({
         type: 'tool_result',
         toolCallId,
         toolName,
-        result: { status: 'failed', error: (err as Error).message },
+        result: { status: 'failed', error: msg },
         agentName,
       });
       return null;
     }
+
+    // Successful parse — drop any stale .failed sidecar from a prior run.
+    clearFailedAttempt(node, this.config.projectDir, this.config.template);
 
     const outputRel = node.outputPath ?? 'prompts/story_essence.json';
     const outputAbs = join(this.config.projectDir, outputRel);
@@ -7454,7 +7645,9 @@ Examples of common failure modes to avoid:
     try {
       this.ensureTimelineInitialized();
       if (!this.timeline) {
-        this.log(`  Timeline missing — cannot assemble`);
+        const msg = 'Timeline missing — cannot assemble';
+        this.log(`  ${msg}`);
+        this.lastNodeError = `Final assembly: ${msg}`;
         return null;
       }
 
@@ -7463,11 +7656,15 @@ Examples of common failure modes to avoid:
 
       const { resolved, errors } = resolveSegmentFilePaths(this.timeline, projectDir);
       if (errors.length > 0) {
-        this.log(`  Timeline resolution errors: ${errors.join('; ')}`);
+        const msg = `Timeline resolution errors: ${errors.join('; ')}`;
+        this.log(`  ${msg}`);
+        this.lastNodeError = `Final assembly: ${msg}`;
         return null;
       }
       if (resolved.length === 0) {
-        this.log(`  No resolved segments from timeline — cannot assemble`);
+        const msg = 'No resolved segments from timeline — cannot assemble';
+        this.log(`  ${msg}`);
+        this.lastNodeError = `Final assembly: ${msg}`;
         return null;
       }
       let resolvedSegments = resolved;
@@ -7674,16 +7871,20 @@ Examples of common failure modes to avoid:
 
         return relPath;
       } else {
+        const msg = 'FFmpeg assembly returned failure';
         this.log(`  Assembly failed`);
+        this.lastNodeError = `Final assembly: ${msg}`;
         return null;
       }
     } catch (error) {
-      this.log(`  Assembly error: ${String(error)}`);
+      const msg = String(error);
+      this.log(`  Assembly error: ${msg}`);
+      this.lastNodeError = `Final assembly: ${msg}`;
       this.emit({
         type: 'tool_result',
         toolCallId,
         toolName: 'assemble_final_video',
-        result: { status: 'error', error: String(error) },
+        result: { status: 'error', error: msg },
         agentName,
         isError: true,
       });

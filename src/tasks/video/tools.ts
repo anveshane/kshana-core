@@ -385,7 +385,7 @@ export async function submitImageGeneration(params: ImageGenerationParams): Prom
       params.frame_id === 'first_frame' ||
       params.frame_id === 'last_frame' ||
       params.frame_id === 'mid_frame'
-        ? (params.frame_id as 'first_frame' | 'last_frame' | 'mid_frame')
+        ? (params.frame_id)
         : undefined;
     context = {
       entityType: 'scene',
@@ -481,7 +481,7 @@ export async function submitImageGeneration(params: ImageGenerationParams): Prom
 
       resolvedRefImages.push({
         filePath: localPath,
-        type: ref.type as 'character' | 'setting',
+        type: ref.type,
         name: ref.name,
       });
     }
@@ -579,7 +579,7 @@ export async function submitImageGeneration(params: ImageGenerationParams): Prom
         (params.frame_id === 'first_frame' ||
           params.frame_id === 'last_frame' ||
           params.frame_id === 'mid_frame')
-          ? (params.frame_id as 'first_frame' | 'last_frame' | 'mid_frame')
+          ? (params.frame_id)
           : undefined;
       addAsset({
         id: artifactId,
@@ -1294,7 +1294,7 @@ export function parsePromptFile(content: string): PromptFileMetadata {
         const type = imageNMatch[2].toLowerCase();
         if (type === 'character' || type === 'setting') {
           result.references.push({
-            type: type as 'character' | 'setting',
+            type: type,
             name: imageNMatch[1].trim(),
             path: inlinePath,
           });
@@ -1439,11 +1439,11 @@ export function resolveReferencesToPaths(
       const searchName = ref.name.replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
       for (const [_imgId, imgPath] of Object.entries(itemFiles)) {
         const filename = path
-          .basename(imgPath as string)
+          .basename(imgPath)
           .toLowerCase()
           .replace(/[^a-z0-9]/g, '');
         if (filename.includes(refPrefix.toLowerCase()) && filename.includes(searchName)) {
-          const fullPath = path.join(projectDir, imgPath as string);
+          const fullPath = path.join(projectDir, imgPath);
           if (fs.existsSync(fullPath)) {
             resolved.push({
               image_id: fullPath,
@@ -2859,8 +2859,8 @@ Run this after all panels have been composed with compose_panel.`,
         return {
           filename: f,
           filepath: path.join(panelsDir, f),
-          sceneNumber: sceneMatch?.[1] != null ? parseInt(sceneMatch[1]!, 10) : 0,
-          shotNumber: shotMatch?.[1] != null ? parseInt(shotMatch[1]!, 10) : 0,
+          sceneNumber: sceneMatch?.[1] != null ? parseInt(sceneMatch[1], 10) : 0,
+          shotNumber: shotMatch?.[1] != null ? parseInt(shotMatch[1], 10) : 0,
         };
       });
 

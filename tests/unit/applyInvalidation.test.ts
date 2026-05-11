@@ -75,26 +75,64 @@ describe("applyInvalidation", () => {
     expect(n.error).toBeUndefined();
   });
 
-  it("does NOT touch nodes outside the invalidation set (graph topology stays intact)", () => {
+  /**
+   * Cascade behavior: invalidating an upstream node should also mark
+   * every transitive dependent pending. Without this, a surgical
+   * "redo this one shot's prompt" leaves the downstream image stuck
+   * in `completed` — the next run skips it, and the new prompt never
+   * affects the rendered image. Same shape of bug we hit on
+   * Baker-and-the-Bee where final_video stayed completed after a
+   * shot_video re-run.
+   *
+   * Older test in this file pinned the OPPOSITE invariant ("does NOT
+   * touch nodes outside the invalidation set"). That contract was
+   * wrong — invalidate's user-facing semantic is "this node's output
+   * is stale", which by transitivity makes its consumers stale too.
+   */
+  it("cascades pending status to transitive dependents by default", () => {
     applyInvalidation(project, ["shot_image_prompt:scene_1_shot_1"]);
+    const downstream = project.executorState.nodes["shot_image:scene_1_shot_1"]!;
+    expect(downstream.status).toBe("pending");
+    expect(downstream.outputPath).toBeUndefined();
+    expect(downstream.completedAt).toBeUndefined();
+  });
+
+  it("with cascade:false, leaves downstream nodes alone (opt-out for surgical regen)", () => {
+    applyInvalidation(
+      project,
+      ["shot_image_prompt:scene_1_shot_1"],
+      { cascade: false },
+    );
     const downstream = project.executorState.nodes["shot_image:scene_1_shot_1"]!;
     expect(downstream.status).toBe("completed");
     expect(downstream.outputPath).toBe("assets/images/foo.png");
     expect(downstream.completedAt).toBe(3000);
   });
 
-  it("persists the invalidated id list onto executorState.lastInvalidatedIds", () => {
-    applyInvalidation(project, [
-      "shot_image_prompt:scene_1_shot_1",
-      "shot_image:scene_1_shot_1",
-    ]);
+  it("persists the invalidated id list (including cascaded dependents) onto executorState.lastInvalidatedIds", () => {
+    applyInvalidation(project, ["shot_image_prompt:scene_1_shot_1"]);
     expect(
-      (project.executorState as unknown as { lastInvalidatedIds: string[] })
-        .lastInvalidatedIds,
-    ).toEqual([
+      ((project.executorState as unknown as { lastInvalidatedIds: string[] })
+        .lastInvalidatedIds).sort(),
+    ).toEqual(
+      [
+        "shot_image_prompt:scene_1_shot_1",
+        "shot_image:scene_1_shot_1",
+      ].sort(),
+    );
+  });
+
+  it("returns seeds (caller-named) separately from the full invalidated set", () => {
+    const result = applyInvalidation(project, [
       "shot_image_prompt:scene_1_shot_1",
-      "shot_image:scene_1_shot_1",
     ]);
+    expect(result.seeds).toEqual(["shot_image_prompt:scene_1_shot_1"]);
+    expect(result.invalidated.sort()).toEqual(
+      [
+        "shot_image_prompt:scene_1_shot_1",
+        "shot_image:scene_1_shot_1",
+      ].sort(),
+    );
   });
 
   it("overwrites a previous lastInvalidatedIds (most recent invalidate wins)", () => {
@@ -143,6 +181,56 @@ describe("applyInvalidation", () => {
    * saw when only the video regenerated and the upstream image
    * stayed put.
    */
+  /**
+   * Regression: live failure on Baker-and-the-Bee where regenerating a
+   * single shot_video left final_video in `completed` state, so the
+   * runner counted it in the 88/88 without re-running ffmpeg and the
+   * existing final_video2.mp4 stayed stale (assembled before the new
+   * shot was rendered). Cascade should walk shot_video → final_video.
+   *
+   * Also verifies the dependents-list dedupe path: real project.json
+   * files in the wild had final_video listed multiple times in the
+   * shot_video's dependents array (we observed 4× on baker), so
+   * naïve cascade would visit it repeatedly. We expect each id to
+   * appear exactly once in the result.
+   */
+  it("cascades from a single shot_video to final_video and dedupes duplicate dependent edges", () => {
+    type N = ExecutorState["nodes"][string];
+    project.executorState.nodes["shot_video:scene_1_shot_1"] = {
+      id: "shot_video:scene_1_shot_1",
+      typeId: "shot_video",
+      itemId: "scene_1_shot_1",
+      displayName: "S1 Shot 1 Video",
+      status: "completed",
+      dependencies: [],
+      // Wild-data shape: same id repeated 4× — see Baker-and-the-Bee
+      // project.json. Cascade must dedupe so we don't double-mark.
+      dependents: ["final_video", "final_video", "final_video", "final_video"],
+      outputPath: "assets/videos/shots/s1shot1_ltx23_xxx.mp4",
+      completedAt: 5000,
+    } as N;
+    project.executorState.nodes["final_video"] = {
+      id: "final_video",
+      typeId: "final_video",
+      displayName: "Final Video",
+      status: "completed",
+      dependencies: ["shot_video:scene_1_shot_1"],
+      dependents: [],
+      outputPath: "assets/videos/final/final_video2.mp4",
+      completedAt: 9000,
+    } as N;
+
+    const result = applyInvalidation(project, ["shot_video:scene_1_shot_1"]);
+
+    const fv = project.executorState.nodes["final_video"]!;
+    expect(fv.status).toBe("pending");
+    expect(fv.outputPath).toBeUndefined();
+    expect(fv.completedAt).toBeUndefined();
+    // Dedupe: final_video should appear exactly once in the result.
+    const occurrences = result.invalidated.filter(id => id === "final_video").length;
+    expect(occurrences).toBe(1);
+  });
+
   it("clears the per-frame outputPaths dict so the executor's incremental-retry path can't reuse stale frames", () => {
     const node = project.executorState.nodes[
       "shot_image:scene_1_shot_1"

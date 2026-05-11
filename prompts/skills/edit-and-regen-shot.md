@@ -66,6 +66,16 @@ shot or frame** — not for project-wide stylistic changes (those need
 
 ## What NOT to do
 
+- **Don't stage the new prompt in a sidecar / `_new` / `.draft` file.**
+  The pipeline reads the canonical filename only — anything you write
+  to `scene-<N>-shot-<M>_new.json` or similar is invisible to the
+  executor. If you want to propose a change before committing, paste
+  the proposed JSON into the chat as a code block and wait for the
+  user's "go" — do NOT touch the filesystem until then. Once approved,
+  overwrite the actual prompt file path (step 4) and run the regen
+  (step 5). Half-applied edits leave the project in a confusing state
+  where the preview shows the old prompt and there's a mystery file
+  on disk no one wired in.
 - Don't rewrite the entire prompt file from scratch — preserve the
   scaffolding (references, generationMode, schema fields).
 - Don't run `dhee_run_to <stage>` for a single-shot change — that
@@ -78,7 +88,19 @@ shot or frame** — not for project-wide stylistic changes (those need
 
 ## Confirming the result
 
-After `dhee_run_to scope='last_invalidated'` finishes, ask the user
-"does this look right?".
-If they want another iteration, repeat steps 1–4 with their next
-change.
+After `dhee_run_to scope='last_invalidated'` finishes:
+
+1. **Call `dhee_describe_image`** on the regenerated frame, passing
+   the prompt you just edited as `expectedPrompt`. The VLM tells you
+   whether the new image actually reflects the edit (or whether the
+   regen drifted, lost a reference, etc.).
+2. **Summarize for the user.** Either "✓ regen matches the new prompt
+   — <one-line description>" or "✗ regen still shows X — likely
+   cause Y, want me to retry?". Don't just say "done — does it look
+   right?" without having looked yourself.
+3. If the user wants another iteration, repeat steps 1–4 of this
+   skill with their next change.
+
+Skip step 1 only if `dhee_describe_image` returns "VLM not
+configured" — in that case fall back to `dhee_show_*` + asking
+the user.

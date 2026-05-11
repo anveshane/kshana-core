@@ -36,7 +36,9 @@ export type ServerMessageType =
   | 'session_timer'            // Production timer updates
   | 'asset_transfer'           // Server sends generated asset to client
   | 'assets_refresh'           // Server pushes full asset list (e.g. after reset)
-  | 'timeline_assembly_request'; // Server asks desktop to assemble final video
+  | 'timeline_assembly_request' // Server asks desktop to assemble final video
+  | 'history'                  // Replayed chat history snapshot on resume
+  | 'history_cleared';         // Confirmation that chat history was purged
 
 /**
  * Message types sent from client to server.
@@ -62,7 +64,8 @@ export type ClientMessageType =
   | 'redo_node'               // Redo a specific node (invalidate + re-execute)
   | 'reset_project'           // Reset project to a specific stage
   | 'timeline_assembly_progress' // Desktop reports assembly progress
-  | 'timeline_assembly_result'; // Desktop reports assembly result
+  | 'timeline_assembly_result' // Desktop reports assembly result
+  | 'clear_chat_history';        // User asked to wipe persisted chat for this session
 
 /**
  * Base message structure for server messages.
@@ -477,6 +480,52 @@ export function isTimelineAssemblyResultMessage(
   msg: ClientMessage,
 ): msg is ClientMessage<TimelineAssemblyResultData> {
   return msg.type === 'timeline_assembly_result';
+}
+
+/**
+ * Chat history snapshot, replayed in one shot to a freshly-connected
+ * frontend after a session is resumed from disk. Frontend overwrites its
+ * `chatMessages` and `toolCalls` state with this payload — much simpler
+ * than streaming individual events out of order.
+ */
+export interface HistoryChatMessage {
+  id: string;
+  type: 'agent' | 'user' | 'system' | 'media';
+  content: string;
+  timestamp: number;
+  agentName?: string;
+  media?: {
+    kind: 'image' | 'video';
+    path: string;
+    project: string;
+    source?: string;
+  };
+}
+
+export interface HistoryToolCall {
+  id: string;
+  toolName: string;
+  args?: Record<string, string>;
+  status: 'executing' | 'completed' | 'error';
+  result?: unknown;
+  startTime: number;
+  duration?: number;
+  agentName?: string;
+}
+
+export interface HistoryData {
+  /** Ordered transcript bubbles (user / agent / media). */
+  messages: HistoryChatMessage[];
+  /** Ordered tool-call cards. */
+  toolCalls: HistoryToolCall[];
+  /** Current focused project, if any (so the frontend can re-select it). */
+  focusedProject?: string;
+  /** Number of compaction events seen — informational. */
+  compactionCount: number;
+}
+
+export function isClearChatHistoryMessage(msg: ClientMessage): msg is ClientMessage<void> {
+  return msg.type === 'clear_chat_history';
 }
 
 /**

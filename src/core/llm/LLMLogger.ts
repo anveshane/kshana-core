@@ -67,20 +67,31 @@ export class LLMLogger {
   /**
    * Log an LLM request (messages and tools).
    */
-  logRequest(messages: Message[], tools?: ToolDefinition[], options?: { temperature?: number }): void {
+  logRequest(
+    messages: Message[],
+    tools?: ToolDefinition[],
+    options?: { temperature?: number; baseUrl?: string; model?: string },
+  ): void {
     if (!this.enabled) return;
 
     const timestamp = new Date().toISOString();
     const header = `\n${'='.repeat(60)}\n=== LLM Request [${timestamp}] ===\n${'='.repeat(60)}\n\n`;
 
+    let connectionLog = '';
+    if (options?.baseUrl || options?.model) {
+      connectionLog = `Target: ${options.baseUrl ?? '(unknown)'} model=${options.model ?? '(unknown)'}\n`;
+    }
+
     let temperatureLog = '';
     if (options?.temperature !== undefined) {
       temperatureLog = `Temperature: ${options.temperature}\n\n`;
+    } else if (connectionLog) {
+      connectionLog += '\n';
     }
 
     // Build full log
-    let fullLog = header + temperatureLog;
-    let truncatedLog = header + temperatureLog;
+    let fullLog = header + connectionLog + temperatureLog;
+    let truncatedLog = header + connectionLog + temperatureLog;
 
     // Log each message
     for (const msg of messages) {

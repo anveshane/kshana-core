@@ -27,17 +27,17 @@ export function inferShotFromPath(path: string): InferredShot | null {
   let m = FRAME_RE.exec(file)
   if (m) {
     return {
-      scene: parseInt(m[1]!, 10),
-      shot: parseInt(m[2]!, 10),
-      frame: m[3]!.toLowerCase() as 'first_frame' | 'last_frame' | 'mid_frame',
+      scene: parseInt(m[1], 10),
+      shot: parseInt(m[2], 10),
+      frame: m[3].toLowerCase() as 'first_frame' | 'last_frame' | 'mid_frame',
       isVideo: false,
     }
   }
   m = VIDEO_RE.exec(file)
   if (m) {
     return {
-      scene: parseInt(m[1]!, 10),
-      shot: parseInt(m[2]!, 10),
+      scene: parseInt(m[1], 10),
+      shot: parseInt(m[2], 10),
       frame: null,
       isVideo: true,
     }

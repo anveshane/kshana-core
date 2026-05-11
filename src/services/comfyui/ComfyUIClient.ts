@@ -33,6 +33,35 @@ function debugLog(message: string): void {
   }
 }
 
+/**
+ * Translate Node's undici `TypeError: fetch failed` into a logged
+ * Error whose message names the URL, method, and the underlying cause
+ * chain (DNS / TLS / ECONNRESET / etc.). The original `cause` property
+ * is preserved for callers that want to inspect it.
+ *
+ * Also writes one debug.log line per failure so the silent-failure
+ * pattern (workflow strategy logged, then nothing) becomes traceable.
+ */
+function enrichFetchError(err: unknown, url: string, method: string): Error {
+  const cause = (err as { cause?: unknown })?.cause;
+  const causeCode = (cause as { code?: unknown } | null)?.code;
+  const causeMsg =
+    cause instanceof Error
+      ? `${cause.name}: ${cause.message}${typeof causeCode === 'string' ? ` [${causeCode}]` : ''}`
+      : cause !== undefined
+        ? String(cause)
+        : '';
+  const baseMsg = err instanceof Error ? err.message : String(err);
+  const enriched = `${method} ${url} failed: ${baseMsg}${causeMsg ? ` (cause: ${causeMsg})` : ''}`;
+  debugLog(`[ComfyUIClient][fetch-error] ${enriched}`);
+  const wrapped = new Error(enriched);
+  if (err instanceof Error && err.stack) wrapped.stack = err.stack;
+  if (cause !== undefined) {
+    (wrapped as { cause?: unknown }).cause = cause;
+  }
+  return wrapped;
+}
+
 export interface ComfyUIClientConfig {
   baseUrl: string;
   outputDir: string;
@@ -43,6 +72,44 @@ export interface ComfyUIClientConfig {
 
 export interface QueueWorkflowOptions {
   workflowId?: string;
+  /**
+   * Optional cancellation signal. When fired mid-`queueAndWaitWS`, the
+   * client closes the active WebSocket, clears timers, and rejects the
+   * pending promise with `Error('aborted')`. Without this, callers
+   * blocked on a long-running ComfyUI workflow had no way to bail —
+   * stop() was advisory and the WS only exited on a server-side
+   * terminal frame, which often never arrived (502s, hung upstream).
+   *
+   * Independent of `ExecutorAgent.stop()`'s `interrupt()` RPC: that
+   * tells the ComfyUI server to abort, this tells the client to stop
+   * waiting. Both fire in parallel during a cancel.
+   */
+  signal?: AbortSignal;
+}
+
+/**
+ * Module-level registry of active WebSocket workflows.
+ *
+ * `abortAllInFlightWorkflows()` lets a caller (typically
+ * `ExecutorAgent.stop()`) tear them down without having to thread
+ * AbortSignal through every workflow call site. Each `queueAndWaitWS`
+ * registers its WS on entry and unregisters in cleanup.
+ */
+const INFLIGHT_WS_REGISTRY = new Set<{
+  close: () => void;
+  abort: (reason: string) => void;
+}>();
+
+export function abortAllInFlightWorkflows(reason = 'aborted'): number {
+  const count = INFLIGHT_WS_REGISTRY.size;
+  for (const handle of [...INFLIGHT_WS_REGISTRY]) {
+    try {
+      handle.abort(reason);
+    } catch {
+      /* best-effort */
+    }
+  }
+  return count;
 }
 
 /**
@@ -218,16 +285,28 @@ export class ComfyUIClient {
   /**
    * Cloud-aware request wrapper that prepends baseUrl, applies search
    * params, and attaches auth headers.
+   *
+   * Wraps fetch with a diagnostic catch: Node's undici throws a bare
+   * `TypeError: fetch failed` for any TCP/TLS-layer error, with the real
+   * reason buried on the unenumerable `cause` property. Re-throws an
+   * Error whose message names the URL, method, and cause chain so the
+   * executor's surfaced error and the debug log both pin the call site.
    */
   private async request(
     pathname: string,
     init: RequestInit = {},
     searchParams?: URLSearchParams
   ): Promise<Response> {
-    return fetch(this.buildUrl(pathname, searchParams), {
-      ...init,
-      headers: { ...this.buildHeaders(), ...(init.headers as Record<string, string> | undefined) },
-    });
+    const url = this.buildUrl(pathname, searchParams);
+    const method = (init.method) ?? 'GET';
+    try {
+      return await fetch(url, {
+        ...init,
+        headers: { ...this.buildHeaders(), ...(init.headers as Record<string, string> | undefined) },
+      });
+    } catch (err) {
+      throw enrichFetchError(err, url, method);
+    }
   }
 
   /**
@@ -342,11 +421,17 @@ export class ComfyUIClient {
       payload['extra_data'] = extraDataPayload;
     }
 
-    const response = await fetch(this.buildUrl('/prompt'), {
-      method: 'POST',
-      headers: this.buildHeaders({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify(payload),
-    });
+    const promptUrl = this.buildUrl('/prompt');
+    let response: Response;
+    try {
+      response = await fetch(promptUrl, {
+        method: 'POST',
+        headers: this.buildHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify(payload),
+      });
+    } catch (err) {
+      throw enrichFetchError(err, promptUrl, 'POST');
+    }
 
     if (!response.ok) {
       const errorText = await response.text();
@@ -439,7 +524,7 @@ export class ComfyUIClient {
             }
             // Cache any outputs found so getOutputImages can use them
             if (cloudHistory.outputs) {
-              this.cloudOutputs.set(promptId, cloudHistory.outputs as Record<string, unknown>);
+              this.cloudOutputs.set(promptId, cloudHistory.outputs);
             }
             return { status: 'completed', prompt_id: promptId };
           }
@@ -511,6 +596,32 @@ export class ComfyUIClient {
       const INACTIVITY_TIMEOUT_MS =
         Math.max(30, parseInt(process.env['COMFYUI_WS_TIMEOUT'] || '60', 10)) * 1000;
       let ws: WebSocket;
+      // Cancellation hooks. Registered in INFLIGHT_WS_REGISTRY so an
+      // external stop() can fire them without threading AbortSignal
+      // through every call site. Also wired to options.signal when
+      // the caller passed one.
+      let aborted = false;
+      const abortHandler = (reason: string) => {
+        if (resolved) return;
+        aborted = true;
+        resolved = true;
+        clearInterval(inactivityCheck);
+        try { ws?.close(); } catch { /* */ }
+        debugLog(`[queueAndWaitWS] aborted: ${reason}`);
+        reject(new Error(`aborted: ${reason}`));
+      };
+      // Bail before doing any I/O if the signal fired pre-call.
+      if (options.signal?.aborted) {
+        reject(new Error('aborted: signal already aborted'));
+        return;
+      }
+      const handle = {
+        close: () => { try { ws?.close(); } catch { /* */ } },
+        abort: abortHandler,
+      };
+      INFLIGHT_WS_REGISTRY.add(handle);
+      const onSignalAbort = () => abortHandler('caller signal');
+      options.signal?.addEventListener('abort', onSignalAbort, { once: true });
 
       const inactivityCheck = setInterval(() => {
         if (resolved) return;
@@ -542,6 +653,8 @@ export class ComfyUIClient {
         } catch {
           /* */
         }
+        INFLIGHT_WS_REGISTRY.delete(handle);
+        options.signal?.removeEventListener('abort', onSignalAbort);
       };
       const finish = (result: CompletionResult) => {
         if (resolved) return;
@@ -605,6 +718,12 @@ export class ComfyUIClient {
       });
 
       ws.on('close', () => {
+        if (aborted) {
+          // Already handled by abortHandler — skip the polling fallback.
+          // Without this gate, an aborted close would re-enter the
+          // polling path and silently keep the call alive after stop().
+          return;
+        }
         if (!resolved) {
           resolved = true;
           // WS drops on cloud happen mid-allocation (idle proxy,
@@ -622,6 +741,7 @@ export class ComfyUIClient {
 
       ws.on('error', err => {
         debugLog(`[queueAndWaitWS] WS error: ${err}`);
+        if (aborted) return;
         if (!resolved) {
           resolved = true;
           cleanup();
@@ -630,6 +750,11 @@ export class ComfyUIClient {
       });
 
       ws.on('message', (raw: Buffer | string) => {
+        // Drop any straggling messages once aborted — `abortHandler`
+        // already rejected the outer promise and asked the WS to
+        // close, but messages already in the channel can still fire
+        // a callback or two before that lands.
+        if (aborted) return;
         // Skip binary messages (preview images)
         if (Buffer.isBuffer(raw) && raw.length > 0 && raw[0] !== 0x7b) {
           lastActivityTime = Date.now();
@@ -688,9 +813,9 @@ export class ComfyUIClient {
             // ("ServiceError"); node_id pins which workflow node blew up.
             const p = action.payload ?? {};
             const parts: string[] = [];
-            if (typeof p['exception_type'] === 'string') parts.push(p['exception_type'] as string);
+            if (typeof p['exception_type'] === 'string') parts.push(p['exception_type']);
             if (typeof p['exception_message'] === 'string')
-              parts.push(p['exception_message'] as string);
+              parts.push(p['exception_message']);
             const nodeId = p['node_id'] ?? p['node'];
             if (nodeId !== undefined && nodeId !== null) parts.push(`node=${String(nodeId)}`);
             const errorMessage = parts.length ? parts.join(' — ') : payloadStr;

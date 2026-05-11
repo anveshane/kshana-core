@@ -10,6 +10,8 @@ import {
   type AgentSessionEvent,
   type ToolDefinition,
 } from '@mariozechner/pi-coding-agent';
+import { existsSync } from 'node:fs';
+import { recordSession, sessionFilePathFor, touchSession } from './sessionStore.js';
 import { getModel } from '@mariozechner/pi-ai';
 import type { Model } from '@mariozechner/pi-ai';
 import type { GenericAgentResult } from '../../core/agent/AgentResult.js';
@@ -43,12 +45,21 @@ function envNumber(name: string, fallback: number): number {
   return Number.isFinite(value) && value > 0 ? value : fallback;
 }
 
-function openAiCompatibleProxyModel(): Model<'openai-completions'> | undefined {
-  const baseUrl = envTrim('OPENAI_BASE_URL');
-  const apiKey = envTrim('OPENAI_API_KEY');
+/**
+ * Build an `openai-completions` Model with explicit baseUrl/apiKey/model from
+ * the given env-var prefix. Used for both the legacy `OPENAI_*` route and the
+ * new `LLM_TIER_HEAVY_*` route. Returns undefined when baseUrl is missing —
+ * pi-ai's `getModel()` cannot route to a custom URL on its own, so without
+ * baseUrl we have to fall back to the named-provider path.
+ */
+function openAiCompatibleProxyModelFromPrefix(
+  prefix: 'OPENAI' | 'LLM_TIER_HEAVY',
+): Model<'openai-completions'> | undefined {
+  const baseUrl = envTrim(`${prefix}_BASE_URL`);
+  const apiKey = envTrim(`${prefix}_API_KEY`);
   if (!baseUrl || !apiKey) return undefined;
 
-  const modelId = envTrim('OPENAI_MODEL') ?? 'deepseek/deepseek-v4-flash';
+  const modelId = envTrim(`${prefix}_MODEL`) ?? 'deepseek/deepseek-v4-flash';
   const lowerModel = modelId.toLowerCase();
   const reasoning =
     lowerModel.includes('deepseek') ||
@@ -71,11 +82,53 @@ function openAiCompatibleProxyModel(): Model<'openai-completions'> | undefined {
 }
 
 export function resolvePiSessionModel(): Model<string> {
+  const model = resolvePiSessionModelInner();
+  if (!model) {
+    // pi-ai's getModel(provider, modelId) returns undefined for unknown
+    // model ids — e.g. a custom proxy model like "Qwen3.6-35B-A3B" is
+    // NOT in pi-ai's static registry. The undefined silently propagates
+    // until pi-coding-agent reads `model.api` and dies with the
+    // unhelpful "Cannot read properties of undefined (reading 'api')".
+    // Fail fast with a message that points at the cause.
+    const llmProvider = envTrim('LLM_PROVIDER') ?? '(unset)';
+    const baseUrl = envTrim('OPENAI_BASE_URL') ?? '(unset)';
+    const modelId = envTrim('OPENAI_MODEL') ?? '(unset)';
+    const hasKey = !!envTrim('OPENAI_API_KEY');
+    throw new Error(
+      `resolvePiSessionModel returned no model. ` +
+        `LLM_PROVIDER=${llmProvider} OPENAI_BASE_URL=${baseUrl} ` +
+        `OPENAI_MODEL=${modelId} hasOpenAIKey=${hasKey}. ` +
+        `For openai-compatible proxies (LM Studio, custom hosts), set ` +
+        `OPENAI_BASE_URL + OPENAI_API_KEY (any non-empty key) so the ` +
+        `proxy-model path fires; pi-ai's static registry will not have ` +
+        `your custom model id.`,
+    );
+  }
+  // Pi-agent uses @mariozechner/pi-coding-agent's internal HTTP stack,
+  // which bypasses LLMLogger — without this log line there is NO
+  // observable signal of which baseUrl/model pi-agent is hitting.
+  // Print to stdout so it lands in the desktop's electron-log capture.
+   
+  console.log(
+    `[resolvePiSessionModel] api=${model.api} provider=${model.provider} ` +
+      `id=${model.id} baseUrl=${(model as { baseUrl?: string }).baseUrl ?? '(default)'}`,
+  );
+  return model;
+}
+
+function resolvePiSessionModelInner(): Model<string> {
   ensureOpenRouterApiKeyFromEnv();
 
   const tierProvider = envTrim('LLM_TIER_HEAVY_PROVIDER');
   const tierModel = envTrim('LLM_TIER_HEAVY_MODEL');
   if (tierProvider) {
+    // When the user has supplied an explicit base URL for the heavy
+    // tier (e.g. self-hosted proxy, LM Studio, Kshana Cloud), build an
+    // openai-completions Model so pi-ai routes to that URL. Without
+    // this, getModel() sends to the named provider's default endpoint
+    // and silently bypasses the user's proxy.
+    const tierProxy = openAiCompatibleProxyModelFromPrefix('LLM_TIER_HEAVY');
+    if (tierProxy) return tierProxy;
     return getModel(
       tierProvider as Parameters<typeof getModel>[0],
       (tierModel ?? 'deepseek/deepseek-v4-flash') as never
@@ -84,7 +137,7 @@ export function resolvePiSessionModel(): Model<string> {
 
   const llmProvider = envTrim('LLM_PROVIDER')?.toLowerCase();
   if (llmProvider === 'openai') {
-    const proxyModel = openAiCompatibleProxyModel();
+    const proxyModel = openAiCompatibleProxyModelFromPrefix('OPENAI');
     if (proxyModel) return proxyModel;
     return getModel('openai', (envTrim('OPENAI_MODEL') ?? 'gpt-4o') as never) as Model<string>;
   }
@@ -117,6 +170,9 @@ export class PiSessionAgent extends TypedEventEmitter {
 
   private readonly tools: ToolDefinition[];
   private readonly systemPrompt: string;
+  private readonly sessionId?: string;
+  private readonly projectSlug?: string;
+  private readonly resumeSessionFile?: string;
 
   constructor(opts?: {
     tools?: ToolDefinition[];
@@ -138,8 +194,24 @@ export class PiSessionAgent extends TypedEventEmitter {
      * Session id to embed in `dhee_dispatch_*` tools so the
      * background task runner tags emitted events with this id, and
      * the host can route them back to the right chat.
+     *
+     * Also used as the on-disk filename for the persisted pi-coding-agent
+     * session JSONL (`<projectSlug>/<sessionId>.jsonl`). Without it, the
+     * session falls back to in-memory only.
      */
     sessionId?: string;
+    /**
+     * Project slug (no `.kshana` suffix) the session is scoped to.
+     * Determines the directory the JSONL transcript is written into.
+     * Without it, the session falls back to in-memory only — pi-agent
+     * still works, but the chat is lost on restart.
+     */
+    projectSlug?: string;
+    /**
+     * Path to an existing pi-coding-agent JSONL session to resume from.
+     * When set, takes precedence over a fresh-create with `projectSlug`.
+     */
+    resumeSessionFile?: string;
   }) {
     super();
     const role: SessionRole = opts?.role ?? 'interactive';
@@ -197,6 +269,9 @@ export class PiSessionAgent extends TypedEventEmitter {
       ? [...baseTools, createFocusProjectTool(opts.focusProject)]
       : baseTools;
     this.systemPrompt = opts?.systemPrompt ?? loadOrchestratorPrompt();
+    this.sessionId = opts?.sessionId;
+    this.projectSlug = opts?.projectSlug;
+    this.resumeSessionFile = opts?.resumeSessionFile;
   }
 
   async initialize(): Promise<void> {
@@ -228,11 +303,65 @@ export class PiSessionAgent extends TypedEventEmitter {
       model,
       customTools: this.tools,
       resourceLoader,
-      sessionManager: SessionManager.inMemory(),
+      sessionManager: this.buildSessionManager(cwd),
       settingsManager,
     });
     this.session = result.session;
     this.unsubscribe = this.session.subscribe(event => this.handleEvent(event));
+  }
+
+  /**
+   * Pick the right SessionManager based on resume / persist / fallback rules.
+   *
+   * - resumeSessionFile present and the JSONL exists → reopen it.
+   * - sessionId + projectSlug → fresh persistent session at a deterministic
+   *   path so the kshana-side index can find it later.
+   * - Otherwise → in-memory only (legacy callers without an id).
+   *
+   * Also records / touches the kshana sessionStore so resumes can locate
+   * the file by sessionId without scanning the disk.
+   */
+  private buildSessionManager(cwd: string): SessionManager {
+    if (this.resumeSessionFile && existsSync(this.resumeSessionFile)) {
+      if (this.sessionId) touchSession(this.sessionId);
+      return SessionManager.open(this.resumeSessionFile);
+    }
+    if (this.sessionId && this.projectSlug) {
+      const sessionFile = sessionFilePathFor(this.sessionId, this.projectSlug);
+      const sessionDir = join(sessionFile, '..');
+      // SessionManager.create() writes a new JSONL using its own id format.
+      // To pin the file to <sessionId>.jsonl so the kshana index stays in
+      // sync, we create then redirect via setSessionFile.
+      const mgr = SessionManager.create(cwd, sessionDir);
+      mgr.setSessionFile(sessionFile);
+      recordSession(this.sessionId, this.projectSlug, sessionFile);
+      return mgr;
+    }
+    return SessionManager.inMemory();
+  }
+
+  /**
+   * Read every persisted session entry (messages, tool calls, compaction
+   * markers, etc.) for this session. Used by the WebSocket resume path
+   * to replay history into a fresh frontend on reconnect.
+   *
+   * Returns an empty array for in-memory sessions or before initialize().
+   */
+  getSessionEntries(): ReturnType<SessionManager['getEntries']> {
+    if (!this.session) return [];
+    const mgr = this.session.sessionManager;
+    if (!mgr.isPersisted()) return [];
+    return mgr.getEntries();
+  }
+
+  /** Whether this session is backed by a persistent JSONL file. */
+  isPersisted(): boolean {
+    return this.session?.sessionManager.isPersisted() ?? false;
+  }
+
+  /** Path to the JSONL transcript file, or undefined for in-memory sessions. */
+  getSessionFile(): string | undefined {
+    return this.session?.sessionManager.getSessionFile();
   }
 
   async run(task: string, userResponse?: string): Promise<GenericAgentResult> {
@@ -242,6 +371,28 @@ export class PiSessionAgent extends TypedEventEmitter {
     const text = userResponse ? `${task}\n\n${userResponse}`.trim() : task;
     if (!text) {
       return { status: 'completed', output: '', todos: [] };
+    }
+
+    // Mid-stream user message → steer. pi-coding-agent throws
+    // "Agent is already processing. Specify streamingBehavior" if
+    // prompt() is called while a previous turn is still streaming.
+    // For chat UX, treat the second message as an interrupt + redirect
+    // ('steer'): the in-flight turn picks up the new instruction and
+    // emits ONE agent_end that resolves the original run() promise.
+    // This run() resolves immediately so the renderer doesn't hang
+    // awaiting a separate result that will never come.
+    if (this.session.isStreaming) {
+      try {
+        await this.session.prompt(text, { streamingBehavior: 'steer' });
+        return { status: 'completed', output: '', todos: [] };
+      } catch (err) {
+        return {
+          status: 'error',
+          output: '',
+          todos: [],
+          error: err instanceof Error ? err.message : String(err),
+        };
+      }
     }
 
     this.streaming = true;

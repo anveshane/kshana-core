@@ -179,6 +179,8 @@ export type AppAction =
   | { type: 'SET_TIMELINE'; timeline: Timeline | null }
   | { type: 'SET_ACTIVE_VIEW'; view: 'chat' | 'storyboard' | 'timeline' }
   | { type: 'SET_TIMER'; timer: AppState['timer'] }
+  | { type: 'SET_HISTORY'; messages: ChatMessage[]; toolCalls: ToolCall[] }
+  | { type: 'CLEAR_CHAT' }
 
 // ── Reducer ────────────────────────────────────────────────
 
@@ -195,6 +197,13 @@ export function appReducer(state: AppState, action: AppAction): AppState {
       return { ...state, projects: action.projects }
 
     case 'SELECT_PROJECT':
+      // Project-scoped state (todos, assets, nodes, timeline, phase) is
+      // wiped because those are derived from the project on disk.
+      // chat state is NOT wiped — it lives on the agent session, which
+      // is shared across project switches and persisted to disk. Wiping
+      // it here would hide messages the agent still remembers in its
+      // context, breaking resume on every project switch. Use the
+      // "New chat" button (CLEAR_CHAT) for an explicit reset.
       return {
         ...state,
         selectedProject: action.name,
@@ -203,12 +212,9 @@ export function appReducer(state: AppState, action: AppAction): AppState {
         todos: [],
         assets: [],
         nodes: {},
-        chatMessages: [],
-        toolCalls: [],
         streamingText: null,
         agentStatus: 'idle',
         timer: { elapsedMs: 0, running: false, completed: false },
-        contextUsage: null,
         timeline: null,
         activeView: 'chat',
       }
@@ -306,6 +312,28 @@ export function appReducer(state: AppState, action: AppAction): AppState {
 
     case 'SET_ACTIVE_VIEW':
       return { ...state, activeView: action.view }
+
+    case 'SET_HISTORY':
+      // Hydrate chat panel from a server-replayed snapshot. Overwrites
+      // any in-flight streaming state since the server is authoritative
+      // on what happened before this connection.
+      return {
+        ...state,
+        chatMessages: action.messages,
+        toolCalls: action.toolCalls,
+        streamingText: null,
+      }
+
+    case 'CLEAR_CHAT':
+      return {
+        ...state,
+        chatMessages: [],
+        toolCalls: [],
+        streamingText: null,
+        agentStatus: 'idle',
+        contextUsage: null,
+        todos: [],
+      }
 
     default:
       return state

@@ -58,7 +58,7 @@ export function useMessageHandler(dispatch: React.Dispatch<AppAction>) {
         const toolCallId = data.toolCallId as string
         const status = data.status as string
         const args = data.arguments as Record<string, unknown> | undefined
-        const result = data.result as unknown
+        const result = data.result
         const agentName = data.agentName as string | undefined
 
         if (status === 'started' || (!status && !result)) {
@@ -288,6 +288,48 @@ export function useMessageHandler(dispatch: React.Dispatch<AppAction>) {
             },
           })
         }
+        break
+      }
+
+      case 'history': {
+        // Resume snapshot from a session reconstructed off disk. Hydrate
+        // chat + tool-call state so the panel looks like the user never
+        // closed the app. Server already filtered out internal plumbing
+        // messages ([SYSTEM EVENT], "(Active project: …)" prefixes).
+        const messages = (data.messages as Array<{
+          id: string
+          type: 'agent' | 'user' | 'system' | 'media'
+          content: string
+          timestamp: number
+          agentName?: string
+          media?: { kind: 'image' | 'video'; path: string; project: string; source?: string }
+        }>) || []
+        const toolCalls = (data.toolCalls as Array<{
+          id: string
+          toolName: string
+          args?: Record<string, string>
+          status: 'executing' | 'completed' | 'error'
+          result?: unknown
+          startTime: number
+          duration?: number
+          agentName?: string
+        }>) || []
+        const focusedProject = data.focusedProject as string | undefined
+        if (focusedProject) {
+          dispatch({ type: 'SELECT_PROJECT', name: focusedProject })
+        }
+        dispatch({
+          type: 'SET_HISTORY',
+          messages,
+          toolCalls,
+        })
+        break
+      }
+
+      case 'history_cleared': {
+        // Server purged the persisted JSONL and minted a fresh sessionId.
+        // Wipe local chat state so the UI matches.
+        dispatch({ type: 'CLEAR_CHAT' })
         break
       }
 

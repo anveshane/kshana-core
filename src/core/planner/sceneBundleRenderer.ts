@@ -153,7 +153,7 @@ export async function renderSceneBundle(req: SceneBundleRequest): Promise<SceneB
     };
     // Reuse parameterizeGeneric for consistency with the rest of the
     // codebase. The expander already returned the parameterMappings.
-    const submission = parameterizeGeneric(workflow as Record<string, unknown>, { parameterMappings }, params) as Record<string, unknown>;
+    const submission = parameterizeGeneric(workflow, { parameterMappings }, params);
 
     // ── 7. Submit + wait ────────────────────────────────────────────
     const startMs = Date.now();

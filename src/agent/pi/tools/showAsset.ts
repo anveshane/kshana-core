@@ -101,6 +101,32 @@ const ShotFrameParams = Type.Object({
 });
 
 /**
+ * Reject calls where `scene` or `shot` are missing / non-positive
+ * (which previously slipped through typebox runtime as `undefined` when
+ * the LLM forgot the arg, then turned into a literal "s1shotundefined_"
+ * prefix scan that returned a "No first-frame found" text result with
+ * no media event — the chat showed ✓ on the tool call but rendered
+ * nothing, and the agent often missed the failure-text and pressed on.
+ *
+ * Throwing here surfaces a real error the agent has to react to.
+ */
+function validateShotFrameParams(
+  params: { project: string; scene: number; shot: number },
+  toolLabel: string,
+): void {
+  if (typeof params.scene !== "number" || !Number.isFinite(params.scene) || params.scene < 1) {
+    throw new Error(
+      `${toolLabel}: 'scene' is required and must be a positive number (got ${JSON.stringify(params.scene)}). Pass scene=N where N is the 1-based scene number.`,
+    );
+  }
+  if (typeof params.shot !== "number" || !Number.isFinite(params.shot) || params.shot < 1) {
+    throw new Error(
+      `${toolLabel}: 'shot' is required and must be a positive number (got ${JSON.stringify(params.shot)}). Pass shot=M where M is the 1-based shot number within the scene. If you don't know the shot, call kshana_list_items to enumerate them first.`,
+    );
+  }
+}
+
+/**
  * Factory functions return a fresh tool wired to an optional onMedia
  * callback. When supplied (PiSessionAgent's chat path always
  * supplies it), every successful resolution fires onMedia so the
@@ -124,6 +150,7 @@ export function createShowFirstFrameTool(opts: ShowAssetOpts = {}): ToolDefiniti
       "Show the latest generated first-frame image for a specific shot. Reads from project.json's scenes tree first, falls back to the manifest for legacy projects. Renders the image inline in chat when used from a desktop session.",
     parameters: ShotFrameParams,
     async execute(_id, params: Static<typeof ShotFrameParams>) {
+      validateShotFrameParams(params, "kshana_show_first_frame");
       const project = await loadProject(params.project);
       const shot = project ? findShot(project, params.scene, params.shot) : undefined;
       if (shot?.firstFrame) {
@@ -165,6 +192,7 @@ export function createShowLastFrameTool(opts: ShowAssetOpts = {}): ToolDefinitio
       "Show the latest generated last-frame image for a specific shot. Reads from project.json's scenes tree first, falls back to the manifest. Renders inline.",
     parameters: ShotFrameParams,
     async execute(_id, params: Static<typeof ShotFrameParams>) {
+      validateShotFrameParams(params, "kshana_show_last_frame");
       const project = await loadProject(params.project);
       const shot = project ? findShot(project, params.scene, params.shot) : undefined;
       if (shot?.lastFrame) {
@@ -206,6 +234,7 @@ export function createShowShotVideoTool(opts: ShowAssetOpts = {}): ToolDefinitio
       "Show the latest rendered shot video clip. Reads from project.json's scenes tree first, falls back to the manifest. Renders inline.",
     parameters: ShotFrameParams,
     async execute(_id, params: Static<typeof ShotFrameParams>) {
+      validateShotFrameParams(params, "kshana_show_shot_video");
       const project = await loadProject(params.project);
       const shot = project ? findShot(project, params.scene, params.shot) : undefined;
       if (shot?.video) {

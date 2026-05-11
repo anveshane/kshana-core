@@ -21,7 +21,14 @@ export type {
   ServerMessage,
   ServerMessageType,
   ClientMessage,
+  HistoryData,
+  HistoryChatMessage,
+  HistoryToolCall,
 } from './types.js';
+export {
+  getSessionHistorySnapshot,
+  clearSessionHistory,
+} from './sessionPersistence.js';
 export { loadDevEnv } from './loadDevEnv.js';
 export type { LoadDevEnvResult } from './loadDevEnv.js';
 export {

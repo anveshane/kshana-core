@@ -40,6 +40,19 @@ export function createShowShotTool(opts: { onMedia?: MediaCallback }): ToolDefin
       "Show all generated media for a specific shot — first frame, last frame, and rendered video — in one call. Each piece appears as its own media card in chat. Use this when the user says 'show me s1 shot 1', 'let me see scene 2 shot 4', or anything that doesn't specify which frame they want. Prefer dhee_show_first_frame / dhee_show_last_frame / dhee_show_shot_video when the user asks for a specific piece.",
     parameters: Params,
     async execute(_id, params: Static<typeof Params>): Promise<AgentToolResult<ShownDetails | { found: false }>> {
+      // Same defense-in-depth as showAsset's frame tools — reject calls
+      // missing scene/shot so the agent gets a real error instead of a
+      // silent "no shot found" fall-through.
+      if (typeof params.scene !== "number" || !Number.isFinite(params.scene) || params.scene < 1) {
+        throw new Error(
+          `kshana_show_shot: 'scene' is required and must be a positive number (got ${JSON.stringify(params.scene)}).`,
+        );
+      }
+      if (typeof params.shot !== "number" || !Number.isFinite(params.shot) || params.shot < 1) {
+        throw new Error(
+          `kshana_show_shot: 'shot' is required and must be a positive number (got ${JSON.stringify(params.shot)}). If you don't know the shot, call kshana_list_items to enumerate them first.`,
+        );
+      }
       const project = await loadProject(params.project);
       const shot = project ? findShot(project, params.scene, params.shot) : undefined;
       if (!shot) {

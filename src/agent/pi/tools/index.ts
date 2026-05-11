@@ -5,6 +5,7 @@ import { dheeNew } from "./newProject.js";
 import { dheeRunTo } from "./runTo.js";
 import { dheeInvalidate } from "./invalidate.js";
 import { dheeReadArtifact } from "./readArtifact.js";
+import { dheeDescribeImage } from "./describeImage.js";
 import { dheeRenderSceneBundle } from "./renderSceneBundle.js";
 import { dheeTaskStatus } from "./taskStatus.js";
 import { dheeTaskCancel } from "./taskCancel.js";
@@ -31,6 +32,7 @@ export const dheeTools = [
   dheeRunTo,
   dheeInvalidate,
   dheeReadArtifact,
+  dheeDescribeImage,
   dheeRenderSceneBundle,
   dheeTaskStatus,
   dheeTaskCancel,
@@ -54,6 +56,7 @@ export {
   dheeRunTo,
   dheeInvalidate,
   dheeReadArtifact,
+  dheeDescribeImage,
   dheeRenderSceneBundle,
   dheeTaskStatus,
   dheeTaskCancel,

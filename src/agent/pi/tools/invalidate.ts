@@ -73,7 +73,7 @@ export const dheeInvalidate = defineTool({
   name: "dhee_invalidate",
   label: "dhee invalidate",
   description:
-    "Invalidate a selection of nodes (mark them pending) so the next dhee_run_to regenerates them. Three selection modes: `node` (single id/alias), `type` (every node of a typeId), `stage` (type cone — start type plus every downstream type). Does NOT run the pipeline — call dhee_run_to after. Use `dhee_run_to scope='last_invalidated'` to run ONLY the just-invalidated set.",
+    "Invalidate a selection of nodes (mark them pending) so the next dhee_run_to regenerates them. Three selection modes: `node` (single id/alias), `type` (every node of a typeId), `stage` (type cone — start type plus every downstream type). Cascades to transitive dependents — invalidating a single shot_video also marks the dependent final_video pending so the next run actually re-renders it. Does NOT run the pipeline — call dhee_run_to after. Use `dhee_run_to scope='last_invalidated'` to run ONLY the just-invalidated set (which now includes the cascaded dependents).",
   parameters: Params,
   async execute(_id, params: Static<typeof Params>): Promise<AgentToolResult<InvalidateDetails>> {
     let projectDir: string;
