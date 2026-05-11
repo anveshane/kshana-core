@@ -20,6 +20,7 @@ import {
   sceneVideoPromptSchema,
 } from './schemas.js';
 import { computeAnchorsForScene } from './shotAnchorComputer.js';
+import { synthesizeCameraTransitions } from './cameraTransitionSynth.js';
 
 export type ShotPlan = z.infer<typeof shotPlanSchema>;
 export type SingleShot = z.infer<typeof singleShotSchema>;
@@ -80,6 +81,15 @@ export function assembleSceneVideoPrompt(
     const a = anchorByShot.get(shot.shotNumber);
     if (a) shot.firstFrameAnchor = a;
   }
+
+  // Camera-transition synthesis. For each shot whose anchor is
+  // `continuity` AND whose camera position has shifted vs the source,
+  // prepend a smooth-movement verb to its cameraWork. Prevents the
+  // image-edit + video models from producing what reads as a hard cut
+  // when we actually want a flowing camera move. `fresh` shots are
+  // deliberate resets so we leave them alone; `view_reuse` chains
+  // back to a familiar setup so the existing cameraWork lands fine.
+  synthesizeCameraTransitions(sortedShots);
 
   const assembled: AssembledSceneVideoPrompt = {
     sceneNumber: plan.sceneNumber,
