@@ -37,7 +37,8 @@ import { assembleSceneVideoPrompt, type SingleShot } from './sceneVideoPromptAss
 import { migrateGraphToTemplate } from './migrateGraphToTemplate.js';
 import { writeFailedAttempt, clearFailedAttempt } from './failedAttempt.js';
 import { classifyValidationError, buildRetrySystemSuffix } from './validationErrorClass.js';
-import { readShotContextFromSvp, buildShotAwareReferences, shouldForceEditPrevious } from './shotReferenceMapping.js';
+import { readShotContextFromSvp, readShotAnchorFromSvp, buildShotAwareReferences, shouldForceEditPrevious } from './shotReferenceMapping.js';
+import { enforceAnchorMode } from './enforceAnchorMode.js';
 import { getPreviousShotIdAcrossScenes } from './crossShotChaining.js';
 import { shouldExpandSceneCollectionToShots } from './collectionExpansion.js';
 import {
@@ -5008,6 +5009,30 @@ Examples of common failure modes to avoid:
 
         if (allInjected.length > 0) {
           this.log(`  [ref-inject] ${node.id}: injected ${allInjected.length} ref(s): ${allInjected.map(i => `${i.frame}/${i.label}#${i.imageNumber}(${i.kind})`).join(', ')}`);
+        }
+
+        // (3.5) Enforce first_frame.generationMode against the
+        // deterministic anchor decision the assembler wrote on the
+        // parent scene_video_prompt. The LLM picks generationMode
+        // itself; if it picked something inconsistent with the anchor
+        // (e.g. image_text_to_image when the anchor says chain on the
+        // prior shot), we override here. Logged so the override is
+        // visible in executor.log.
+        if (node.itemId) {
+          const sceneId2 = node.itemId.match(/^(scene_\d+)/)?.[1];
+          const shotNum2 = parseInt(node.itemId.match(/shot_(\d+)/)?.[1] ?? '0', 10);
+          if (sceneId2 && shotNum2 > 0) {
+            const anchor = readShotAnchorFromSvp(this.config.projectDir, sceneId2, shotNum2);
+            if (anchor) {
+              const r = enforceAnchorMode(
+                parsed,
+                anchor as Parameters<typeof enforceAnchorMode>[1],
+              );
+              if (r.changed) {
+                this.log(`  [anchor-mode] ${node.id}: first_frame.generationMode ${r.previousMode} → ${r.enforcedMode} (anchor: ${anchor.reason}${anchor.sourceShotNumber ? `:${anchor.sourceShotNumber}` : ''})`);
+              }
+            }
+          }
         }
 
         // (4) Hard gate: OTS prose + <2 character refs ⇒ reject.

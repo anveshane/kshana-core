@@ -413,6 +413,45 @@ export function readShotContextFromSvp(
   };
 }
 
+/**
+ * Read the `firstFrameAnchor` for a specific shot out of the assembled
+ * scene_video_prompt JSON. Returns null when the file is missing /
+ * unparseable / the shot doesn't carry an anchor (legacy projects
+ * predating the visual-continuity work).
+ *
+ * Used by shot_image_prompt's post-validation to enforce the anchor's
+ * required generationMode on the LLM's output.
+ */
+export function readShotAnchorFromSvp(
+  projectDir: string,
+  sceneId: string,
+  shotNumber: number,
+): { reason: string; sourceShotNumber?: number } | null {
+  const path = join(projectDir, 'prompts/videos/scenes', `${sceneId}.json`);
+  if (!existsSync(path)) return null;
+  let raw: string;
+  try {
+    raw = readFileSync(path, 'utf-8').trim();
+  } catch {
+    return null;
+  }
+  if (raw.startsWith('```')) {
+    raw = raw.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '');
+  }
+  let parsed: any;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  const shots = Array.isArray(parsed?.shots) ? parsed.shots : Array.isArray(parsed) ? parsed : [];
+  const shot = shots.find((s: any) => s?.shotNumber === shotNumber);
+  if (!shot) return null;
+  const anchor = shot.firstFrameAnchor;
+  if (!anchor || typeof anchor !== 'object' || !anchor.reason) return null;
+  return anchor;
+}
+
 export function buildShotAwareReferences(
   allRefs: AvailableRef[],
   shot: ShotContext,
