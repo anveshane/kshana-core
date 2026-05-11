@@ -32,9 +32,10 @@ import { addShotImageNodes } from './addShotImageNodes.js';
 import { executeShotImageLastFrame } from './executeShotImageLastFrame.js';
 import { BackwardPlanner } from './BackwardPlanner.js';
 import { AssetScanner } from './AssetScanner.js';
-import { resolveInputs, writeOutput } from './contentResolver.js';
+import { resolveInputs, writeOutput, getOutputPath } from './contentResolver.js';
 import { assembleSceneVideoPrompt, type SingleShot } from './sceneVideoPromptAssembler.js';
 import { migrateGraphToTemplate } from './migrateGraphToTemplate.js';
+import { writeFailedAttempt, clearFailedAttempt } from './failedAttempt.js';
 import { readShotContextFromSvp, buildShotAwareReferences, shouldForceEditPrevious } from './shotReferenceMapping.js';
 import { getPreviousShotIdAcrossScenes } from './crossShotChaining.js';
 import { shouldExpandSceneCollectionToShots } from './collectionExpansion.js';
@@ -2739,7 +2740,24 @@ export class ExecutorAgent extends TypedEventEmitter {
                       this.log(`  Full retry succeeded — valid JSON`);
                     } else {
                       this.log(`  Full retry also failed: ${retryValidation.error}`);
-                      this.executor.markFailed(node.id, `Invalid JSON output after retry: ${retryValidation.error}`);
+                      // Persist the broken content + error so the user can
+                      // inspect what the LLM actually produced in the
+                      // desktop's Content tab, rather than digging through
+                      // logs/llm-calls.log.
+                      const outRel = getOutputPath(node, this.config.projectDir, this.config.template);
+                      const sidecar = writeFailedAttempt(
+                        this.config.projectDir,
+                        outRel,
+                        retryContent,
+                        retryValidation.error ?? 'unknown validation error',
+                      );
+                      const hint = sidecar.contentPath
+                        ? ` Broken output saved to ${sidecar.contentPath} (.failed).`
+                        : '';
+                      this.executor.markFailed(
+                        node.id,
+                        `Invalid JSON output after retry: ${retryValidation.error}.${hint}`,
+                      );
                       this.emitTodoUpdate();
                       return;
                     }
@@ -2752,6 +2770,10 @@ export class ExecutorAgent extends TypedEventEmitter {
                 node, content, this.config.projectDir, this.config.template,
               );
               this.log(`  Written to: ${outputPath}`);
+
+              // Clean up any prior `.failed` / `.failed.error` sidecars
+              // from a previous broken-output run. Idempotent.
+              clearFailedAttempt(this.config.projectDir, outputPath);
 
               // Record the prompt path in project.json for media nodes so a
               // later run can legitimately skip LLM regeneration (crash
@@ -7579,7 +7601,21 @@ Examples of common failure modes to avoid:
     const content = JSON.stringify(assembled, null, 2);
     const validation = this.validateJsonOutput(content, node);
     if (!validation.valid) {
-      const msg = `Assembled scene_video_prompt failed post-validation: ${validation.error}`;
+      // Persist the assembled-but-rejected content so the user can
+      // inspect what was stitched (often the post-validators flag a
+      // continuity / dialogue-fit issue and the user wants to see
+      // exactly which shot tripped which rule).
+      const outRel = getOutputPath(node, this.config.projectDir, this.config.template);
+      const sidecar = writeFailedAttempt(
+        this.config.projectDir,
+        outRel,
+        content,
+        validation.error ?? 'unknown validation error',
+      );
+      const hint = sidecar.contentPath
+        ? ` Assembled output saved to ${sidecar.contentPath} (.failed).`
+        : '';
+      const msg = `Assembled scene_video_prompt failed post-validation: ${validation.error}.${hint}`;
       this.executor.markFailed(node.id, msg);
       this.emit({ type: 'tool_result', toolCallId, toolName, result: { status: 'error', error: msg }, agentName, isError: true });
       this.emitTodoUpdate();
@@ -7589,6 +7625,8 @@ Examples of common failure modes to avoid:
 
     // 5. Write to disk and emit completion.
     const outputRel = writeOutput(node, finalContent, this.config.projectDir, this.config.template);
+    // Clean up any prior .failed sidecars from a previous broken run.
+    clearFailedAttempt(this.config.projectDir, outputRel);
     this.log(`  scene_video_prompt assembled: ${outputRel} (${shots.length} shots)`);
     this.emit({
       type: 'tool_result',
