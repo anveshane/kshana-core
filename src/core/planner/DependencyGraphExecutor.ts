@@ -610,8 +610,19 @@ export class DependencyGraphExecutor {
     this.rewireTypeLevelRefsToPerItem(dependent.typeId);
 
     // Recursive cascade: expand any downstream collection nodes that have
-    // matching scope on the type we just expanded
+    // matching scope on the type we just expanded.
+    //
+    // Re-entrancy guard: a downstream collection may appear here AFTER a
+    // sibling cascade already expanded it (e.g. when scene_video_prompt
+    // has matching-scope deps on BOTH scene_shot_plan AND shot_breakdown,
+    // expanding scene_shot_plan triggers a chain that recursively expands
+    // shot_breakdown — whose own cascade expands scene_video_prompt. The
+    // outer scene_shot_plan loop then tries to expand scene_video_prompt
+    // again from the stale `downstreamCollections` snapshot, overwriting
+    // the per-item nodes' freshly-populated dependents). Skip downstreams
+    // that no longer exist in the graph.
     for (const downstream of downstreamCollections) {
+      if (!this.nodes.has(downstream.id)) continue;
       const downstreamTypeDef = this.template.artifactTypes[downstream.typeId];
       if (!downstreamTypeDef) continue;
 

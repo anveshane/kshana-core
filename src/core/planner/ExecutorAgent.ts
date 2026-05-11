@@ -33,6 +33,7 @@ import { executeShotImageLastFrame } from './executeShotImageLastFrame.js';
 import { BackwardPlanner } from './BackwardPlanner.js';
 import { AssetScanner } from './AssetScanner.js';
 import { resolveInputs, writeOutput } from './contentResolver.js';
+import { assembleSceneVideoPrompt, type SingleShot } from './sceneVideoPromptAssembler.js';
 import { readShotContextFromSvp, buildShotAwareReferences, shouldForceEditPrevious } from './shotReferenceMapping.js';
 import { getPreviousShotIdAcrossScenes } from './crossShotChaining.js';
 import { shouldExpandSceneCollectionToShots } from './collectionExpansion.js';
@@ -87,7 +88,7 @@ import type { Timeline, SegmentDescriptor, TimelineLayerEntry } from '../timelin
 import type { TodoNodeInfo } from '../../events/events.js';
 import { fitShotDurations } from './shotDurationFit.js';
 import { scanMultiSpeakerShots, scanAmbiguousSpeakerTag } from './dialogueValidation.js';
-import { validateWithSchema, normalizeSceneVideoPrompt, getPromptSchema, maxTokensForJsonNode } from './schemas.js';
+import { validateWithSchema, normalizeSceneVideoPrompt, getPromptSchema, maxTokensForJsonNode, shotPlanSchema, singleShotSchema } from './schemas.js';
 import {
   validateContinuitySequence,
   checkPositionContinuity,
@@ -2485,6 +2486,16 @@ export class ExecutorAgent extends TypedEventEmitter {
                 return;
               }
               finalOutputPath = essenceResult;
+            } else if (node.typeId === 'scene_video_prompt') {
+              // Stage C of the hierarchical breakdown — deterministic
+              // assembly of scene_shot_plan + N shot_breakdown outputs into
+              // the existing sceneVideoPromptSchema shape. No LLM call.
+              const assemblyResult = await this.executeSceneVideoPromptAssembly(node, toolCallId, agentName);
+              if (!assemblyResult) {
+                // markFailed already called inside the helper.
+                return;
+              }
+              finalOutputPath = assemblyResult;
             } else {
               // Non-deterministic node — needs LLM (or skip-if-exists)
               // 1. Resolve inputs
@@ -2603,7 +2614,7 @@ export class ExecutorAgent extends TypedEventEmitter {
               }
 
               // Validate JSON output for nodes that require it
-              const jsonValidatedTypes = ['scene_video_prompt', 'shot_image_prompt', 'character_image', 'setting_image'];
+              const jsonValidatedTypes = ['scene_shot_plan', 'shot_breakdown', 'scene_video_prompt', 'shot_image_prompt', 'character_image', 'setting_image'];
               if (jsonValidatedTypes.includes(node.typeId)) {
                 const validation = this.validateJsonOutput(content, node);
                 if (validation.valid && validation.normalizedContent) {
@@ -2980,10 +2991,12 @@ export class ExecutorAgent extends TypedEventEmitter {
     const effectiveCategory = node.typeId === 'shot_image_prompt' ? 'visual_ref' : category;
 
     let systemPrompt: string;
-    if (node.typeId === 'scene_video_prompt') {
-      // Minimal system prompt — all rules and field definitions are in the guide
-      // (scene_breakdown_guide.md) which autoresearch optimizes end-to-end
-      systemPrompt = `You are a cinematic shot planner. Output ONLY valid JSON.`;
+    if (node.typeId === 'scene_shot_plan') {
+      // Stage A — lightweight shot plan. All rules in scene_breakdown_plan_guide.md.
+      systemPrompt = `You are a cinematic shot planner. Plan the SHOT LIST for this scene — number of shots, ordering, purpose, duration, and a one-line summary per shot. Output ONLY valid JSON.`;
+    } else if (node.typeId === 'shot_breakdown') {
+      // Stage B — single-shot expansion. All rules in scene_breakdown_shot_guide.md.
+      systemPrompt = `You are a cinematographer expanding a single shot from a pre-approved scene plan. Output ONLY valid JSON for ONE shot object.`;
     } else if (node.typeId === 'shot_image_prompt') {
       // Minimal system prompt — all rules and JSON structure are in the guide
       // (shot_composition_guide.md) which autoresearch optimizes end-to-end
@@ -2994,7 +3007,7 @@ export class ExecutorAgent extends TypedEventEmitter {
 
     // Inject guides/skills for relevant categories
     const loadedSkills: string[] = [];
-    const needsSkills = effectiveCategory === 'visual_ref' || effectiveCategory === 'clip' || effectiveCategory === 'segment' || node.typeId === 'plot' || node.typeId === 'story' || node.typeId === 'scene_video_prompt' || node.typeId === 'world_style' || node.typeId === 'shot_motion_directive';
+    const needsSkills = effectiveCategory === 'visual_ref' || effectiveCategory === 'clip' || effectiveCategory === 'segment' || node.typeId === 'plot' || node.typeId === 'story' || node.typeId === 'scene_shot_plan' || node.typeId === 'shot_breakdown' || node.typeId === 'world_style' || node.typeId === 'shot_motion_directive';
     if (needsSkills) {
       const skills = this.loadSkillsForNode(node);
       if (skills.content) {
@@ -3028,8 +3041,12 @@ export class ExecutorAgent extends TypedEventEmitter {
       parts.push(`**Target video duration:** ${duration} seconds (${Math.floor(duration / 60)}m ${duration % 60}s)`);
     }
 
-    // Scene-level: inject this scene's duration allocation
-    if (node.typeId === 'scene' || node.typeId === 'scene_video_prompt') {
+    // Scene-level: inject this scene's duration allocation. The plan stage
+    // (scene_shot_plan) needs the same shot-count cap that the legacy
+    // single-call scene_video_prompt got — it's the stage that decides
+    // shot count, so the cap MUST land here. shot_breakdown gets it too
+    // for context (e.g. so a shot can self-check its duration).
+    if (node.typeId === 'scene' || node.typeId === 'scene_shot_plan' || node.typeId === 'shot_breakdown') {
       if (perSceneDuration > 0) {
         // HARD shot-count cap derived from the scene's duration budget. Each
         // shot is at least 3s (LTX 2.3 minimum), so the maximum shot count
@@ -3059,13 +3076,14 @@ export class ExecutorAgent extends TypedEventEmitter {
       }
     }
 
-    // scene_video_prompt: inject the canonical refId list so the LLM uses
-    // exact strings for mainSubject/secondarySubject/focus refs. Without
-    // this, the LLM invents IDs from prose in the scene script (e.g.
+    // scene_shot_plan / shot_breakdown: inject the canonical refId list so
+    // the LLM uses exact strings for mainSubject/secondarySubject/focus refs.
+    // Without this, the LLM invents IDs from prose in the scene script (e.g.
     // "Johnathan O'Hare" → `johnathan` or `johnathan_o_hare` when the
-    // canonical refId is `johnathan_o'hare`). See scene_breakdown_guide.md.
+    // canonical refId is `johnathan_o'hare`). Both stages need it: Stage A
+    // sets mainSubject/secondarySubject; Stage B sets perspectiveOf/focus.*.
     let availableRefsBlock = '';
-    if (node.typeId === 'scene_video_prompt') {
+    if (node.typeId === 'scene_shot_plan' || node.typeId === 'shot_breakdown') {
       const refLines: string[] = [];
       for (const n of allNodes) {
         if (!n.itemId) continue;
@@ -3539,9 +3557,40 @@ Examples of common failure modes to avoid:
       }
     }
 
+    // For shot_breakdown (Stage B of hierarchical breakdown): inject the
+    // full scene plan as <scene_plan> (so the LLM has continuity context
+    // for what shots come before / after) and the single plan entry for
+    // THIS shot as <this_shot>. Without these blocks the per-shot LLM
+    // would see only the scene script and have no idea where this shot
+    // sits in the sequence.
+    let shotBreakdownPlanBlock = '';
+    if (node.typeId === 'shot_breakdown' && node.itemId) {
+      const sceneId = node.itemId.match(/(scene_\d+)/)?.[1];
+      const shotNum = parseInt(node.itemId.match(/shot_(\d+)/)?.[1] ?? '0', 10);
+      if (sceneId && shotNum > 0) {
+        const planNode = this.executor.getNode(`scene_shot_plan:${sceneId}`);
+        if (planNode?.outputPath) {
+          try {
+            const planPath = join(this.config.projectDir, planNode.outputPath);
+            let planContent = readFileSync(planPath, 'utf-8').trim();
+            if (planContent.startsWith('```')) {
+              planContent = planContent.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '');
+            }
+            const planJson = JSON.parse(planContent);
+            const thisEntry = (planJson.shotPlan ?? []).find((p: { shotNumber?: number }) => p.shotNumber === shotNum);
+            const thisEntryStr = thisEntry ? JSON.stringify(thisEntry, null, 2) : `(no plan entry found for shotNumber ${shotNum})`;
+            shotBreakdownPlanBlock = `\n\n<scene_plan>\n${planContent}\n</scene_plan>\n\n<this_shot>\n${thisEntryStr}\n</this_shot>\n\nExpand THIS shot only. Copy shotNumber, purpose, and duration verbatim from <this_shot>. Use <scene_plan> for continuity context (what comes before / after).`;
+            this.log(`  shot_breakdown: injected scene_plan (${(planJson.shotPlan ?? []).length} shots) + this_shot for ${node.itemId}`);
+          } catch (err) {
+            this.log(`  shot_breakdown: failed to read scene plan for ${node.itemId}: ${(err as Error).message}`);
+          }
+        }
+      }
+    }
+
     const user = inputs.contextBlock
-      ? `${task}${projectContext}${availableRefsBlock}${referenceImageContext}${sceneStateContext}${characterTagsBlock}${perspectiveContext}${focusContext}${shotContextHint}${storyEssenceBlock}${sceneAssignment}${motionAudioContext}\n\n${inputs.contextBlock}`
-      : `${task}${projectContext}${availableRefsBlock}${referenceImageContext}${sceneStateContext}${characterTagsBlock}${perspectiveContext}${focusContext}${shotContextHint}${storyEssenceBlock}${sceneAssignment}${motionAudioContext}`;
+      ? `${task}${projectContext}${availableRefsBlock}${referenceImageContext}${sceneStateContext}${characterTagsBlock}${perspectiveContext}${focusContext}${shotContextHint}${storyEssenceBlock}${sceneAssignment}${motionAudioContext}${shotBreakdownPlanBlock}\n\n${inputs.contextBlock}`
+      : `${task}${projectContext}${availableRefsBlock}${referenceImageContext}${sceneStateContext}${characterTagsBlock}${perspectiveContext}${focusContext}${shotContextHint}${storyEssenceBlock}${sceneAssignment}${motionAudioContext}${shotBreakdownPlanBlock}`;
 
     return { system: systemPrompt, user, loadedSkills };
   }
@@ -3643,14 +3692,20 @@ Examples of common failure modes to avoid:
     const parts: string[] = [];
     const loadedFiles: string[] = [];
 
-    // Map node types to guide names and content types for skill resolution
+    // Map node types to guide names and content types for skill resolution.
+    //
+    // Hierarchical scene-breakdown flow:
+    //  - scene_shot_plan (Stage A) → scene_breakdown_plan_guide
+    //  - shot_breakdown  (Stage B) → scene_breakdown_shot_guide
+    //  - scene_video_prompt (Stage C, deterministic) — no guide; no LLM call
     const guideMap: Record<string, string> = {
       plot: 'plot_guide',
       story: 'screenplay_guide',
       character_image: 'character_image_guide',
       setting_image: 'setting_image_guide',
       shot_image_prompt: 'shot_composition_guide',
-      scene_video_prompt: 'scene_breakdown_guide',
+      scene_shot_plan: 'scene_breakdown_plan_guide',
+      shot_breakdown: 'scene_breakdown_shot_guide',
       shot_video: 'scene_video_guide',
       scene: 'scene_guide',
       world_style: 'world_style_guide',
@@ -3662,7 +3717,8 @@ Examples of common failure modes to avoid:
       character_image: 'character_image_prompt',
       setting_image: 'setting_image_prompt',
       shot_image_prompt: 'shot_image_prompt',
-      scene_video_prompt: 'scene_video_prompt',
+      scene_shot_plan: 'scene_video_prompt',
+      shot_breakdown: 'scene_video_prompt',
       shot_video: 'scene_video_prompt',
     };
 
@@ -3961,7 +4017,16 @@ Examples of common failure modes to avoid:
         // persisted shot_motion_directive:scene_1 with isCollection=false) must not block expansion.
         if (shouldExpandSceneCollectionToShots(node, this.config.template)) {
           const sceneId = node.itemId!;
-          const svpNode = this.executor.getNode(`scene_video_prompt:${sceneId}`);
+          // shot_breakdown reads from scene_shot_plan (Stage A output);
+          // every other expandable shot type reads from scene_video_prompt
+          // (which is now the deterministic Stage C assembled output).
+          const sourceNodeId = node.typeId === 'shot_breakdown'
+            ? `scene_shot_plan:${sceneId}`
+            : `scene_video_prompt:${sceneId}`;
+          const sourceShotsField = node.typeId === 'shot_breakdown'
+            ? 'shotPlan'
+            : 'shots';
+          const svpNode = this.executor.getNode(sourceNodeId);
           if (svpNode?.status === 'completed' && svpNode.outputPath) {
             const hasChildren = this.executor.getAllNodes().some(
               n => n.typeId === node.typeId && n.itemId?.startsWith(`${sceneId}_shot_`),
@@ -3972,15 +4037,50 @@ Examples of common failure modes to avoid:
                 let content = readFileSync(fullPath, 'utf-8').trim();
                 if (content.startsWith('```')) content = content.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '');
                 const parsed = JSON.parse(content);
-                const shots = parsed.shots ?? (Array.isArray(parsed) ? parsed : []);
+                const shots = parsed[sourceShotsField] ?? (Array.isArray(parsed) ? parsed : []);
                 if (shots.length > 0) {
                   const sceneLabel = sceneId.replace('scene_', 'S');
-                  const shotItems = shots.map((s: any) => ({
-                    itemId: `${sceneId}_shot_${s.shotNumber}`,
-                    name: `${sceneLabel} Shot ${s.shotNumber}: ${s.cameraWork?.split(',')[0] || 'shot'}`,
-                  }));
-                  this.log(`  Re-expanding ${node.id} → ${shotItems.length} per-shot nodes`);
+                  const shotItems = shots.map((s: any) => {
+                    // Per-shot label: prefer cameraWork (post-breakdown),
+                    // fall back to oneLineSummary (plan-only), then a
+                    // generic label.
+                    const label = (typeof s.cameraWork === 'string' && s.cameraWork.split(',')[0])
+                      || (typeof s.oneLineSummary === 'string' && s.oneLineSummary.substring(0, 60))
+                      || 'shot';
+                    return {
+                      itemId: `${sceneId}_shot_${s.shotNumber}`,
+                      name: `${sceneLabel} Shot ${s.shotNumber}: ${label}`,
+                    };
+                  });
+                  this.log(`  Re-expanding ${node.id} → ${shotItems.length} per-shot nodes (source: ${sourceNodeId})`);
                   this.executor.expandCollection(node.id, shotItems);
+
+                  // shot_breakdown special-case: scene_video_prompt:scene_N
+                  // depends on shot_breakdown (scope=matching). Because
+                  // scene_video_prompt:scene_N is per-item (not a
+                  // collection), expandCollection's built-in dependent
+                  // rewiring doesn't pick this up — its 'matching' branch
+                  // only fires when the dependent is itself a collection.
+                  // Manually rewire so the assembler waits on every per-shot
+                  // child instead of the now-deleted parent collection.
+                  if (node.typeId === 'shot_breakdown') {
+                    const svpDeterministic = this.executor.getNode(`scene_video_prompt:${sceneId}`);
+                    if (svpDeterministic) {
+                      const oldParentDepId = node.id;
+                      svpDeterministic.dependencies = svpDeterministic.dependencies.filter(d => d !== oldParentDepId);
+                      for (const child of shotItems) {
+                        const childId = `shot_breakdown:${child.itemId}`;
+                        if (!svpDeterministic.dependencies.includes(childId)) {
+                          svpDeterministic.dependencies.push(childId);
+                        }
+                        const childNode = this.executor.getNode(childId);
+                        if (childNode && !childNode.dependents.includes(svpDeterministic.id)) {
+                          childNode.dependents.push(svpDeterministic.id);
+                        }
+                      }
+                      this.log(`  Rewired ${svpDeterministic.id} → depends on ${shotItems.length} shot_breakdown children`);
+                    }
+                  }
 
                   // For shot_image_prompt: also create shot_image and shot_video per-shot nodes
                   if (node.typeId === 'shot_image_prompt') {
@@ -5175,8 +5275,10 @@ Examples of common failure modes to avoid:
       temperature: isFormulaic ? 0.3 : 0.7,
     };
 
-    // Force JSON output for all structured/image prompt nodes
-    const jsonNodeTypes = ['scene_video_prompt', 'shot_image_prompt', 'character_image', 'setting_image'];
+    // Force JSON output for all structured/image prompt nodes.
+    // scene_video_prompt is intentionally NOT here — it's a deterministic
+    // assembler post-refactor and never reaches this LLM path.
+    const jsonNodeTypes = ['scene_shot_plan', 'shot_breakdown', 'shot_image_prompt', 'character_image', 'setting_image'];
     const isJsonNode = jsonNodeTypes.includes(node.typeId) || typeDef?.outputFormat === 'json';
     if (isJsonNode) {
       options.responseFormat = { type: 'json_object' };
@@ -7293,6 +7395,155 @@ Examples of common failure modes to avoid:
     this.emit({
       type: 'agent_text',
       text: `**Story Essence** → \`${outputRel}\` — genre: ${essence.genre}; throughline: ${essence.throughline}`,
+      isFinal: false,
+    });
+
+    return outputRel;
+  }
+
+  /**
+   * Stage C of the hierarchical scene-breakdown flow — deterministic
+   * assembly of scene_shot_plan + N shot_breakdown outputs into the
+   * existing sceneVideoPromptSchema shape, with all the post-validators
+   * the legacy single-call path ran (continuity, one-setting, dialogue
+   * fit, multi-speaker scan).
+   *
+   * Returns the relative output path on success, null on failure (and
+   * marks the node failed via executor.markFailed).
+   */
+  private async executeSceneVideoPromptAssembly(
+    node: ExecutionNode,
+    toolCallId: string,
+    agentName: string,
+  ): Promise<string | null> {
+    const sceneId = node.itemId;
+    if (!sceneId) {
+      this.executor.markFailed(node.id, `scene_video_prompt node has no itemId`);
+      return null;
+    }
+
+    const toolName = 'assemble_scene_breakdown';
+    this.emit({
+      type: 'tool_call',
+      toolCallId,
+      toolName,
+      arguments: { item: node.displayName, deterministic: true, scene: sceneId },
+      agentName,
+    });
+
+    // 1. Load the scene_shot_plan (Stage A output) for this scene.
+    const planNode = this.executor.getNode(`scene_shot_plan:${sceneId}`);
+    if (!planNode || planNode.status !== 'completed' || !planNode.outputPath) {
+      const msg = `scene_shot_plan:${sceneId} is not completed (status=${planNode?.status ?? 'missing'})`;
+      this.executor.markFailed(node.id, msg);
+      this.emit({ type: 'tool_result', toolCallId, toolName, result: { status: 'error', error: msg }, agentName, isError: true });
+      this.emitTodoUpdate();
+      return null;
+    }
+    let plan;
+    try {
+      const planPath = join(this.config.projectDir, planNode.outputPath);
+      const planContent = readFileSync(planPath, 'utf-8').trim();
+      const cleaned = planContent.startsWith('```')
+        ? planContent.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '')
+        : planContent;
+      const parsed = JSON.parse(cleaned);
+      const r = shotPlanSchema.safeParse(parsed);
+      if (!r.success) {
+        throw new Error(`shotPlanSchema mismatch: ${r.error.issues.map(i => i.path.join('.') + ': ' + i.message).join('; ')}`);
+      }
+      plan = r.data;
+    } catch (err) {
+      const msg = `Failed to load scene_shot_plan for ${sceneId}: ${(err as Error).message}`;
+      this.executor.markFailed(node.id, msg);
+      this.emit({ type: 'tool_result', toolCallId, toolName, result: { status: 'error', error: msg }, agentName, isError: true });
+      this.emitTodoUpdate();
+      return null;
+    }
+
+    // 2. Load every shot_breakdown:{sceneId}_shot_* output. Order doesn't
+    // matter — the assembler sorts by shotNumber.
+    const shotNodes = this.executor.getAllNodes().filter(n =>
+      n.typeId === 'shot_breakdown' && n.itemId?.startsWith(`${sceneId}_shot_`),
+    );
+    if (shotNodes.length === 0) {
+      const msg = `No shot_breakdown nodes found for ${sceneId}`;
+      this.executor.markFailed(node.id, msg);
+      this.emit({ type: 'tool_result', toolCallId, toolName, result: { status: 'error', error: msg }, agentName, isError: true });
+      this.emitTodoUpdate();
+      return null;
+    }
+    const shots: SingleShot[] = [];
+    for (const shotNode of shotNodes) {
+      if (shotNode.status !== 'completed' || !shotNode.outputPath) {
+        const msg = `${shotNode.id} is not completed (status=${shotNode.status})`;
+        this.executor.markFailed(node.id, msg);
+        this.emit({ type: 'tool_result', toolCallId, toolName, result: { status: 'error', error: msg }, agentName, isError: true });
+        this.emitTodoUpdate();
+        return null;
+      }
+      try {
+        const shotPath = join(this.config.projectDir, shotNode.outputPath);
+        const shotContent = readFileSync(shotPath, 'utf-8').trim();
+        const cleaned = shotContent.startsWith('```')
+          ? shotContent.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '')
+          : shotContent;
+        const parsed = JSON.parse(cleaned);
+        const r = singleShotSchema.safeParse(parsed);
+        if (!r.success) {
+          throw new Error(`singleShotSchema mismatch: ${r.error.issues.map(i => i.path.join('.') + ': ' + i.message).join('; ')}`);
+        }
+        shots.push(r.data);
+      } catch (err) {
+        const msg = `Failed to load ${shotNode.id}: ${(err as Error).message}`;
+        this.executor.markFailed(node.id, msg);
+        this.emit({ type: 'tool_result', toolCallId, toolName, result: { status: 'error', error: msg }, agentName, isError: true });
+        this.emitTodoUpdate();
+        return null;
+      }
+    }
+
+    // 3. Stitch.
+    let assembled;
+    try {
+      assembled = assembleSceneVideoPrompt(plan, shots);
+    } catch (err) {
+      const msg = `Assembler rejected inputs for ${sceneId}: ${(err as Error).message}`;
+      this.executor.markFailed(node.id, msg);
+      this.emit({ type: 'tool_result', toolCallId, toolName, result: { status: 'error', error: msg }, agentName, isError: true });
+      this.emitTodoUpdate();
+      return null;
+    }
+
+    // 4. Run the existing post-validators by routing the assembled JSON
+    // through validateJsonOutput — that path runs normalizeSceneVideoPrompt,
+    // continuity-sequence, one-setting-per-scene, dialogue-fit and
+    // multi-speaker checks. Any of them rejecting marks the node failed
+    // so the user sees the same error semantics as the legacy LLM path.
+    const content = JSON.stringify(assembled, null, 2);
+    const validation = this.validateJsonOutput(content, node);
+    if (!validation.valid) {
+      const msg = `Assembled scene_video_prompt failed post-validation: ${validation.error}`;
+      this.executor.markFailed(node.id, msg);
+      this.emit({ type: 'tool_result', toolCallId, toolName, result: { status: 'error', error: msg }, agentName, isError: true });
+      this.emitTodoUpdate();
+      return null;
+    }
+    const finalContent = validation.normalizedContent ?? content;
+
+    // 5. Write to disk and emit completion.
+    const outputRel = writeOutput(node, finalContent, this.config.projectDir, this.config.template);
+    this.log(`  scene_video_prompt assembled: ${outputRel} (${shots.length} shots)`);
+    this.emit({
+      type: 'tool_result',
+      toolCallId,
+      toolName,
+      result: { status: 'completed', file: outputRel, shots: shots.length },
+      agentName,
+    });
+    this.emit({
+      type: 'agent_text',
+      text: `**Scene Breakdown** → \`${outputRel}\` (assembled ${shots.length} shots from plan + per-shot LLM outputs)`,
       isFinal: false,
     });
 
