@@ -1,0 +1,29 @@
+{
+  "version": "3.0",
+  "id": "proj-1777878369450-djhzk3",
+  "title": "hello",
+  "originalInputFile": "original_input.md",
+  "style": "cinematic_realism",
+  "inputType": "idea",
+  "createdAt": 1777878369450,
+  "updatedAt": 1777878369495,
+  "templateId": "narrative",
+  "targetDuration": 30,
+  "duration": 30,
+  "autonomousMode": true,
+  "assets": [],
+  "productionStartedAt": 1777878369450,
+  "elapsedMs": 2,
+  "goal": {
+    "targetArtifacts": [
+      "final_short"
+    ],
+    "description": "",
+    "preferences": {
+      "style": "cinematic_realism",
+      "duration": 30
+    },
+    "setAt": 1777878369457,
+    "status": "active"
+  }
+}

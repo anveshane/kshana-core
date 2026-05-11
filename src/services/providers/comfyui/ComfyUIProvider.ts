@@ -30,13 +30,13 @@ import type {
   VideoGenerationInput,
   ProviderProgressCallback,
 } from '../types.js';
-import { findKshanaCoreRoot } from '../../../agent/pi/paths.js';
+import { finddheeCoreRoot } from '../../../agent/pi/paths.js';
 
-// Anchor on kshana-core's own root so embedded hosts (kshana-desktop)
+// Anchor on dhee-core's own root so embedded hosts (dhee-desktop)
 // don't lose log entries when their cwd has no `logs/` dir.
 const DEBUG_LOG_DIR = (() => {
   try {
-    return path.join(findKshanaCoreRoot(import.meta.url), 'logs');
+    return path.join(finddheeCoreRoot(import.meta.url), 'logs');
   } catch {
     return path.join(process.cwd(), 'logs');
   }
@@ -289,7 +289,7 @@ export class ComfyUIProvider implements GenerationProvider {
 
     // Determine workflow: explicit user override (mode registry) wins,
     // otherwise default to the built-in FLUX 2 Klein edit workflow
-    // shipped with kshana-core. The exact ID resolves via
+    // shipped with dhee-core. The exact ID resolves via
     // chooseImageEditWorkflow (mode-aware: local vs cloud).
     let workflowName = process.env['COMFY_MODE'] === 'cloud'
       ? 'flux2_klein_edit_cloud'

@@ -578,7 +578,7 @@ export class WebSocketHandler {
       // Send fresh todos from the reset project.json so UI updates immediately
       try {
         const { readFileSync, existsSync } = await import('fs');
-        const projectPath = join(process.cwd(), `${projectName}.kshana`, 'project.json');
+        const projectPath = join(process.cwd(), `${projectName}.dhee`, 'project.json');
         const project = JSON.parse(readFileSync(projectPath, 'utf-8'));
         const nodes = project.executorState?.nodes ?? {};
         const todos = Object.values(nodes).map((n: any) => ({
@@ -593,7 +593,7 @@ export class WebSocketHandler {
         // Push fresh assets so the storyboard clears anything cleared by reset.
         // The reset script clears each cleared node's `outputPath` but leaves the
         // file on disk; filterLiveAssets drops those stale entries.
-        const manifestPath = join(process.cwd(), `${projectName}.kshana`, 'assets', 'manifest.json');
+        const manifestPath = join(process.cwd(), `${projectName}.dhee`, 'assets', 'manifest.json');
         if (existsSync(manifestPath)) {
           try {
             const manifest = JSON.parse(readFileSync(manifestPath, 'utf-8'));
@@ -633,7 +633,7 @@ export class WebSocketHandler {
     socket: WebSocket,
     projectName: string,
   ): Promise<void> {
-    const projectDirName = `${projectName}.kshana`;
+    const projectDirName = `${projectName}.dhee`;
     const projectFile = join(process.cwd(), projectDirName, 'project.json');
     const timelineFile = join(process.cwd(), projectDirName, 'timeline.json');
 
@@ -778,7 +778,7 @@ export class WebSocketHandler {
       });
 
       const toolNames = this.conversationManager.getSessionToolNames(sessionId);
-      const projectName = projectDirName.replace('.kshana', '');
+      const projectName = projectDirName.replace('.dhee', '');
       this.sendMessage(socket, createServerMessage<StatusData>('status', sessionId, {
         status: 'ready',
         message: `Project "${data.title}" created`,

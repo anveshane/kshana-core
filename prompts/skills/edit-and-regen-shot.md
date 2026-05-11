@@ -8,7 +8,7 @@ description: Apply a creative change to a single shot or frame by editing its pr
 Use this when the user asks for a creative change to **one specific
 shot or frame** — not for project-wide stylistic changes (those need
 `scene_video_prompt` resets) and not for fresh starts (those use
-`kshana_run_to`).
+`dhee_run_to`).
 
 ## Steps
 
@@ -53,24 +53,24 @@ shot or frame** — not for project-wide stylistic changes (those need
 4. **Write the file back** with `write` (or `edit` if it's a small
    targeted change). The new JSON must remain valid.
 
-5. **Trigger the regen** with `kshana_invalidate` + `kshana_run_to`:
-   - `kshana_invalidate node=shot_image:scene_<N>_shot_<M>` then
-     `kshana_run_to scope='last_invalidated'` — regenerates just that
+5. **Trigger the regen** with `dhee_invalidate` + `dhee_run_to`:
+   - `dhee_invalidate node=shot_image:scene_<N>_shot_<M>` then
+     `dhee_run_to scope='last_invalidated'` — regenerates just that
      image (uses the new prompt; produces fresh first+last frames).
-   - `kshana_invalidate node=shot_video:scene_<N>_shot_<M>` then
-     `kshana_run_to scope='last_invalidated'` — regenerates the video
+   - `dhee_invalidate node=shot_video:scene_<N>_shot_<M>` then
+     `dhee_run_to scope='last_invalidated'` — regenerates the video
      (uses the new motion directive over the existing frames).
 
    The regenerated asset surfaces as a media card in the chat as it
-   lands on disk — you don't need to call `kshana_show_*` after.
+   lands on disk — you don't need to call `dhee_show_*` after.
 
 ## What NOT to do
 
 - Don't rewrite the entire prompt file from scratch — preserve the
   scaffolding (references, generationMode, schema fields).
-- Don't run `kshana_run_to <stage>` for a single-shot change — that
+- Don't run `dhee_run_to <stage>` for a single-shot change — that
   re-executes every shot.
-- Don't call `kshana_invalidate stage=<upstream>` (plot, story,
+- Don't call `dhee_invalidate stage=<upstream>` (plot, story,
   characters, setting, scene, world_style, scene_video_prompt) — that
   wipes wide swaths of generated content. Always invalidate the
   smallest scope that gets the job done; for a single shot edit that
@@ -78,7 +78,7 @@ shot or frame** — not for project-wide stylistic changes (those need
 
 ## Confirming the result
 
-After `kshana_run_to scope='last_invalidated'` finishes, ask the user
+After `dhee_run_to scope='last_invalidated'` finishes, ask the user
 "does this look right?".
 If they want another iteration, repeat steps 1–4 with their next
 change.

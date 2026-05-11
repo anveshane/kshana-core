@@ -41,7 +41,7 @@ export interface AssemblyConfig {
   preset?: string;
   timeoutMs?: number;
   /** Watermark text drawn in the bottom-right corner. Defaults to env
-   * `KSHANA_WATERMARK` or `'kshana-core'`. Pass an empty string to disable. */
+   * `dhee_WATERMARK` or `'dhee-core'`. Pass an empty string to disable. */
   watermark?: string;
 }
 
@@ -415,14 +415,14 @@ export function mobileCompatibleEncodeArgs(): string[] {
  * Regenerate with `scripts/render-watermark.ts` if the asset is missing.
  */
 const WATERMARK_PNG_CANDIDATES = [
-  'assets/watermark_kshana.png',
+  'assets/watermark_dhee.png',
   'assets/watermark.png',
 ];
 
 /**
  * Resolve the watermark PNG path (or `null` if none of the candidates
  * exist). Paths are checked relative to the current working directory
- * first, then the kshana-core package root.
+ * first, then the dhee-core package root.
  */
 export function resolveWatermarkPath(cwd: string = process.cwd()): string | null {
   for (const rel of WATERMARK_PNG_CANDIDATES) {
@@ -706,20 +706,20 @@ export async function assembleVideos(
     );
   }
 
-  // Watermark: composite a pre-rendered PNG (Apple Chancery 'kshana') onto
+  // Watermark: composite a pre-rendered PNG (Apple Chancery 'dhee') onto
   // the bottom-right. We use overlay (always available) instead of drawtext
   // (often missing on Homebrew/system FFmpeg builds because libfreetype is
-  // not enabled by default). Set KSHANA_WATERMARK=off to disable, or supply
+  // not enabled by default). Set dhee_WATERMARK=off to disable, or supply
   // `watermark: ''` in config.
   const watermarkDisabled =
-    config.watermark === '' || process.env['KSHANA_WATERMARK'] === 'off';
+    config.watermark === '' || process.env['dhee_WATERMARK'] === 'off';
   const watermarkPath = watermarkDisabled ? null : resolveWatermarkPath();
   if (watermarkPath) {
     // Append PNG as an extra -i input; track its index for the filter.
     const watermarkInputIdx = inputArgs.filter(a => a === '-i').length;
     inputArgs.push('-i', watermarkPath);
     filterParts.push(buildWatermarkOverlayFilter('concated', watermarkInputIdx, 'outv'));
-  } else if (config.watermark !== '' && process.env['KSHANA_WATERMARK'] !== 'off') {
+  } else if (config.watermark !== '' && process.env['dhee_WATERMARK'] !== 'off') {
     // No watermark asset found — log a hint but don't fail the assembly.
     // We still need to alias `concated` to `outv` if no watermark was applied.
     filterParts.push(`[concated]copy[outv]`);

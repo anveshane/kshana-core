@@ -1651,7 +1651,7 @@ async function ensureLocalVideoSourceImage(
     }
 
     const imageBuffer = await sessionFs.readFileBuffer(imagePath);
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kshana-video-source-'));
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dhee-video-source-'));
     const extension = path.extname(imagePath) || '.png';
     const tempPath = path.join(tempDir, `source${extension}`);
     fs.writeFileSync(tempPath, imageBuffer);
@@ -1710,7 +1710,7 @@ async function ensureLocalReferenceImage(
     }
 
     const imageBuffer = await sessionFs.readFileBuffer(resolvedRemotePath);
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kshana-image-ref-'));
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dhee-image-ref-'));
     const extension = path.extname(imagePath) || '.png';
     const tempPath = path.join(tempDir, `reference${extension}`);
     fs.writeFileSync(tempPath, imageBuffer);

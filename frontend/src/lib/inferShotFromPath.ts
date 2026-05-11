@@ -1,5 +1,5 @@
 /**
- * Pure parser for kshana-style asset filenames. Used by MediaWithOverlay
+ * Pure parser for dhee-style asset filenames. Used by MediaWithOverlay
  * to derive the scene/shot/frame triple needed for the Edit and Redo
  * overlay buttons. Returns null for filenames that don't match the
  * grammar (orphan/legacy entries, character/setting refs, final video).

@@ -13,7 +13,7 @@
  * cross-reference both files.
  *
  * Used by:
- *   - pi-agent `kshana_reset` tool (replaces runScript shell-out)
+ *   - pi-agent `dhee_reset` tool (replaces runScript shell-out)
  *   - scripts/reset-project.ts (delegates to this so dev + prod share
  *     a single source of truth)
  */
@@ -50,7 +50,7 @@ interface ExecutionNode {
 export interface ResetProjectStageOpts {
   /** Where projects live (`getProjectsDir()` for the host). */
   basePath: string;
-  /** Project name (folder is `<name>.kshana`). */
+  /** Project name (folder is `<name>.dhee`). */
   projectName: string;
   /** Stage alias from STAGE_ALIASES (e.g. `shot_image`, `scene_video_prompt`). */
   stage: string;
@@ -154,7 +154,7 @@ export function resetProjectStage(
   );
 
   // ── Locate project ───────────────────────────────────────────────
-  const projectDir = join(opts.basePath, `${opts.projectName}.kshana`);
+  const projectDir = join(opts.basePath, `${opts.projectName}.dhee`);
   const projectPath = join(projectDir, 'project.json');
   if (!existsSync(projectPath)) {
     throw new ResetProjectError(`Project not found: ${projectPath}`);

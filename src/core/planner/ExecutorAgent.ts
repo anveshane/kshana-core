@@ -895,7 +895,7 @@ export class ExecutorAgent extends TypedEventEmitter {
   /**
    * Pin the isolated-redo whitelist to the supplied ids.
    *
-   * Used by `kshana_run_to scope='last_invalidated'` (and the UI's
+   * Used by `dhee_run_to scope='last_invalidated'` (and the UI's
    * "Run only this" affordance) so the next run() executes ONLY
    * those nodes and exits when they're done — no cascade into
    * unrelated pending work in the graph.
@@ -1847,7 +1847,7 @@ export class ExecutorAgent extends TypedEventEmitter {
       this.log(`Handling /reset: project=${projectName}, stage=${stage}`);
       try {
         const { execSync } = await import('child_process');
-        const projectRoot = dirname(this.config.projectDir); // parent of .kshana dir
+        const projectRoot = dirname(this.config.projectDir); // parent of .dhee dir
         const scriptPath = join(projectRoot, 'scripts', 'reset-project.ts');
         const cmd = `npx tsx "${scriptPath}" "${projectName}" "${stage}"`;
         this.log(`Running: ${cmd} (cwd: ${projectRoot})`);
@@ -1911,7 +1911,7 @@ export class ExecutorAgent extends TypedEventEmitter {
     this.ensureTimelineInitialized();
     this.reconcileCompletedSceneTimelineSegments();
 
-    const agentName = this.config.name ?? 'kshana-executor';
+    const agentName = this.config.name ?? 'dhee-executor';
 
     this.log('=== Execution started ===');
     this.log(`Nodes: ${this.executor.getAllNodes().map(n => n.id).join(', ')}`);
@@ -3370,7 +3370,7 @@ Examples of common failure modes to avoid:
               this.log(`  Target state saved for ${sceneId} shot ${shotNum}`);
 
               // Show BEFORE + TARGET state cards in UI
-              const agentName = this.config.name ?? 'kshana-executor';
+              const agentName = this.config.name ?? 'dhee-executor';
               const beforeCallId = `state_before_${node.itemId}_${Date.now()}`;
               this.emit({ type: 'tool_call', toolCallId: beforeCallId, toolName: 'scene_state', arguments: { shot: node.itemId, phase: 'BEFORE' }, agentName });
               this.emit({ type: 'tool_streaming', toolCallId: beforeCallId, chunk: formatStateForPrompt(previousState), done: true, agentName, toolName: 'scene_state' });
@@ -5192,7 +5192,7 @@ Examples of common failure modes to avoid:
       }
     }
 
-    const agentName = this.config.name ?? 'kshana-executor';
+    const agentName = this.config.name ?? 'dhee-executor';
     const effectiveToolName = toolDisplayName ?? `generate_${node.typeId}`;
     // Think-tag parsing path — always active.
     // Separates <think> blocks from content and emits them separately.
@@ -5319,7 +5319,7 @@ Examples of common failure modes to avoid:
     content: string,
     outputPath?: string,
   ): Promise<void> {
-    const agentName = this.config.name ?? 'kshana-executor';
+    const agentName = this.config.name ?? 'dhee-executor';
 
     // Determine what we're extracting based on node type
     const isShotExtraction = node.typeId === 'scene_video_prompt';
@@ -5504,7 +5504,7 @@ Examples of common failure modes to avoid:
     promptFilePath: string,
     toolCallId: string,
   ): Promise<string | null> {
-    const agentName = this.config.name ?? 'kshana-executor';
+    const agentName = this.config.name ?? 'dhee-executor';
     const projectDir = this.config.projectDir;
     const fullPromptPath = join(projectDir, promptFilePath);
 
@@ -5812,7 +5812,7 @@ Examples of common failure modes to avoid:
       if (additionalFrames.length > 0) {
         node.outputPaths = { ...node.outputPaths, first_frame: firstFramePath };
 
-        const agentName = this.config.name ?? 'kshana-executor';
+        const agentName = this.config.name ?? 'dhee-executor';
 
         for (const frameId of additionalFrames) {
           const frameData = parsedJson.frames[frameId];
@@ -6071,7 +6071,7 @@ Examples of common failure modes to avoid:
     toolCallId: string,
     frameId?: string,
   ): Promise<string | null> {
-    const agentName = this.config.name ?? 'kshana-executor';
+    const agentName = this.config.name ?? 'dhee-executor';
 
     try {
       // Parse the structured JSON
@@ -6614,7 +6614,7 @@ Examples of common failure modes to avoid:
     node: ExecutionNode,
     toolCallId: string,
   ): Promise<string | null> {
-    const agentName = this.config.name ?? 'kshana-executor';
+    const agentName = this.config.name ?? 'dhee-executor';
 
     // ── prompt_relay mode: render the whole scene as one bundle mp4
     // and return that path for every shot in the scene. The render
@@ -7431,7 +7431,7 @@ Examples of common failure modes to avoid:
     node: ExecutionNode,
     toolCallId: string,
   ): Promise<string | null> {
-    const agentName = this.config.name ?? 'kshana-executor';
+    const agentName = this.config.name ?? 'dhee-executor';
     const projectDir = this.config.projectDir;
 
     this.log(`  Starting final assembly`);

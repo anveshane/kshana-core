@@ -59,7 +59,7 @@ describe('posthog analytics', () => {
         distinctId: 'install:install-1',
         event: 'desktop_app_started',
         properties: expect.objectContaining({
-          app_component: 'kshana-desktop',
+          app_component: 'dhee-desktop',
           app_version: '1.2.3',
           install_id: 'install-1',
           source: 'test',

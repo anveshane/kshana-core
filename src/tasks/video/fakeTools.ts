@@ -1,6 +1,6 @@
 /**
  * Fake tool handlers for generation tools.
- * When KSHANA_FAKE_MODE=1, these replace the real ComfyUI-based handlers.
+ * When dhee_FAKE_MODE=1, these replace the real ComfyUI-based handlers.
  * Each creates a placeholder PNG with sharp showing all parameters passed.
  */
 import * as fs from 'fs';

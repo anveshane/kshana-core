@@ -575,11 +575,11 @@ export function ToolCallCard({ toolCall, onEditPrompt, onRedoNode }: ToolCallCar
     return () => clearInterval(interval)
   }, [status])
 
-  // kshana_* tools collapse by default — the agent narrates results in chat,
+  // dhee_* tools collapse by default — the agent narrates results in chat,
   // so the JSON dump is duplication. Click the header to expand for details.
   // Other tools keep their legacy behavior (always expanded).
-  const isKshanaTool = toolName.startsWith('kshana_')
-  const [expanded, setExpanded] = useState<boolean>(!isKshanaTool)
+  const isdheeTool = toolName.startsWith('dhee_')
+  const [expanded, setExpanded] = useState<boolean>(!isdheeTool)
 
   const elapsed = status === 'executing' ? Math.round((Date.now() - startTime) / 1000) : undefined
   const duration = toolCall.duration ? Math.round((toolCall.duration - startTime) / 1000) : undefined
@@ -648,10 +648,10 @@ export function ToolCallCard({ toolCall, onEditPrompt, onRedoNode }: ToolCallCar
   // For content gen and assembly, streaming is handled in the body
   const showSeparateStreaming = !isContentGen && toolName !== 'assemble_final_video' && toolName !== 'extract_collections' && toolName !== 'scene_state'
 
-  // Header controls — when collapsed (kshana_* default), the whole header
+  // Header controls — when collapsed (dhee_* default), the whole header
   // is a button that expands the body. Always render the header + media so
   // image/video previews remain visible without clicking through.
-  const isCollapsible = isKshanaTool
+  const isCollapsible = isdheeTool
   const headerClass = `flex items-center justify-between px-3 py-2 ${expanded ? 'border-b border-line-soft' : ''} ${isCollapsible ? 'cursor-pointer select-none hover:bg-graphite-300/40' : ''}`
 
   return (
