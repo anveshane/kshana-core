@@ -36,6 +36,7 @@ import { resolveInputs, writeOutput, getOutputPath } from './contentResolver.js'
 import { assembleSceneVideoPrompt, type SingleShot } from './sceneVideoPromptAssembler.js';
 import { migrateGraphToTemplate } from './migrateGraphToTemplate.js';
 import { writeFailedAttempt, clearFailedAttempt } from './failedAttempt.js';
+import { classifyValidationError, buildRetrySystemSuffix } from './validationErrorClass.js';
 import { readShotContextFromSvp, buildShotAwareReferences, shouldForceEditPrevious } from './shotReferenceMapping.js';
 import { getPreviousShotIdAcrossScenes } from './crossShotChaining.js';
 import { shouldExpandSceneCollectionToShots } from './collectionExpansion.js';
@@ -2654,67 +2655,97 @@ export class ExecutorAgent extends TypedEventEmitter {
                   content = validation.normalizedContent;
                 }
                 if (!validation.valid) {
-                  this.log(`  JSON validation failed: ${validation.error} — asking LLM to fix...`);
+                  // Classify before routing. Structural errors (bad JSON
+                  // syntax, missing fields, type mismatches) get the
+                  // legacy json_repair → retry path — json_repair can
+                  // plausibly fix syntax-level issues. Semantic errors
+                  // (the JSON parses fine but violates a project rule —
+                  // hallucinated character refs, OTS-with-single-char,
+                  // shotNumber mismatch) skip json_repair entirely
+                  // because it can't help: the syntax was already valid.
+                  // Instead they go directly to a targeted retry with
+                  // the actual validation message injected into the
+                  // system prompt as corrective guidance.
+                  const errorClass = classifyValidationError(validation.error ?? '');
+                  let currentError = validation.error ?? '';
+                  let recovered = false;
+                  this.log(`  JSON validation failed (${errorClass}): ${currentError}`);
                   this.emit({
                     type: 'notification',
                     level: 'warning',
-                    message: `Invalid JSON from LLM for ${node.displayName} — attempting repair`,
+                    message: errorClass === 'structural'
+                      ? `Invalid JSON from LLM for ${node.displayName} — attempting repair`
+                      : `Output rejected for ${node.displayName} — retrying with targeted guidance`,
                   });
 
-                  // Close the original tool card as error
+                  // Close the original tool card as error.
                   this.emit({
                     type: 'tool_result',
                     toolCallId,
                     toolName,
-                    result: { status: 'error', error: `Invalid JSON: ${validation.error}` },
+                    result: { status: 'error', error: `Invalid JSON: ${currentError}` },
                     agentName,
                     isError: true,
                   });
 
-                  // Step 1: Ask the LLM to fix the broken JSON — new card
-                  const repairCallId = `repair_${node.id}_${Date.now()}`;
-                  this.emit({
-                    type: 'tool_call',
-                    toolCallId: repairCallId,
-                    toolName: 'json_repair',
-                    arguments: {
-                      item: node.displayName,
-                      error: validation.error,
-                      model: this.modelFor('utility.json_repair'),
-                    },
-                    agentName,
-                  });
-                  const fixPrompt = `The following JSON output has an error. Fix it and return ONLY the corrected valid JSON — no explanation, no markdown fences, no extra text.\n\nError: ${validation.error}\n\nBroken JSON:\n${content.substring(0, 8000)}`;
-                  const fixedContent = await this.generateForNode(
-                    node,
-                    'You are a JSON repair tool. Return ONLY valid JSON. No markdown, no explanation.',
-                    fixPrompt,
-                    repairCallId,
-                    'json_repair',
-                    'utility.json_repair',
-                  );
-                  const fixValidation = this.validateJsonOutput(fixedContent, node);
-                  if (fixValidation.valid) {
-                    content = fixValidation.normalizedContent ?? fixedContent;
-                    this.log(`  LLM JSON repair succeeded`);
+                  // Step 1 (structural only): try json_repair. Skipped
+                  // for semantic failures — repair can't fix what isn't
+                  // a JSON-syntax issue, and a wasted LLM call is real.
+                  if (errorClass === 'structural') {
+                    const repairCallId = `repair_${node.id}_${Date.now()}`;
                     this.emit({
-                      type: 'tool_result',
+                      type: 'tool_call',
                       toolCallId: repairCallId,
                       toolName: 'json_repair',
-                      result: { status: 'completed' },
+                      arguments: {
+                        item: node.displayName,
+                        error: currentError,
+                        model: this.modelFor('utility.json_repair'),
+                      },
                       agentName,
                     });
-                  } else {
-                    this.log(`  LLM repair failed: ${fixValidation.error} — full retry...`);
-                    this.emit({
-                      type: 'tool_result',
-                      toolCallId: repairCallId,
-                      toolName: 'json_repair',
-                      result: { status: 'error', error: fixValidation.error },
-                      agentName,
-                      isError: true,
-                    });
-                    // Step 2: Fall back to full regeneration — new card
+                    const fixPrompt = `The following JSON output has an error. Fix it and return ONLY the corrected valid JSON — no explanation, no markdown fences, no extra text.\n\nError: ${currentError}\n\nBroken JSON:\n${content.substring(0, 8000)}`;
+                    const fixedContent = await this.generateForNode(
+                      node,
+                      'You are a JSON repair tool. Return ONLY valid JSON. No markdown, no explanation.',
+                      fixPrompt,
+                      repairCallId,
+                      'json_repair',
+                      'utility.json_repair',
+                    );
+                    const fixValidation = this.validateJsonOutput(fixedContent, node);
+                    if (fixValidation.valid) {
+                      content = fixValidation.normalizedContent ?? fixedContent;
+                      recovered = true;
+                      this.log(`  LLM JSON repair succeeded`);
+                      this.emit({
+                        type: 'tool_result',
+                        toolCallId: repairCallId,
+                        toolName: 'json_repair',
+                        result: { status: 'completed' },
+                        agentName,
+                      });
+                    } else {
+                      this.log(`  LLM repair failed: ${fixValidation.error} — full retry...`);
+                      this.emit({
+                        type: 'tool_result',
+                        toolCallId: repairCallId,
+                        toolName: 'json_repair',
+                        result: { status: 'error', error: fixValidation.error },
+                        agentName,
+                        isError: true,
+                      });
+                      // Use the most recent error as the retry's
+                      // corrective guidance — it reflects the current
+                      // state of the content after one repair attempt.
+                      currentError = fixValidation.error ?? currentError;
+                    }
+                  }
+
+                  // Step 2: full retry. Fires when:
+                  //   - semantic error (skipped step 1), or
+                  //   - structural error AND step 1's repair also failed.
+                  if (!recovered) {
                     const retryCallId = `retry_${node.id}_${Date.now()}`;
                     this.emit({
                       type: 'tool_call',
@@ -2723,13 +2754,22 @@ export class ExecutorAgent extends TypedEventEmitter {
                       arguments: {
                         item: node.displayName,
                         retry: true,
+                        errorClass,
                         model: this.modelFor(this.purposeForNode(node)),
                       },
                       agentName,
                     });
+                    // Class-aware retry guidance: structural retries get
+                    // the generic "must be valid JSON" reminder; semantic
+                    // retries get the actual validation message injected
+                    // so the LLM has a specific thing to correct.
+                    const retrySystem = system + buildRetrySystemSuffix(
+                      errorClass,
+                      currentError,
+                    );
                     const retryContent = await this.generateForNode(
                       node,
-                      system + '\n\nCRITICAL: Your output MUST be valid JSON. Do not include markdown, backticks, or any text outside the JSON object.',
+                      retrySystem,
                       user,
                       retryCallId,
                       toolName,
@@ -2740,10 +2780,10 @@ export class ExecutorAgent extends TypedEventEmitter {
                       this.log(`  Full retry succeeded — valid JSON`);
                     } else {
                       this.log(`  Full retry also failed: ${retryValidation.error}`);
-                      // Persist the broken content + error so the user can
-                      // inspect what the LLM actually produced in the
-                      // desktop's Content tab, rather than digging through
-                      // logs/llm-calls.log.
+                      // Persist the broken content + error so the user
+                      // can inspect what the LLM actually produced in
+                      // the desktop's Content tab, rather than digging
+                      // through logs/llm-calls.log.
                       const outRel = getOutputPath(node, this.config.projectDir, this.config.template);
                       const sidecar = writeFailedAttempt(
                         this.config.projectDir,
