@@ -153,6 +153,30 @@ function depsAdequate(
     if (dep.scope === 'matching' && node.itemId) {
       const perItem = `${dep.artifactTypeId}:${node.itemId}`;
       satisfied = currentDeps.has(perItem) || currentDeps.has(dep.artifactTypeId);
+      if (!satisfied) {
+        // Coarser-granularity match: when the consumer is shot-level
+        // (`scene_1_shot_3`) but the dep type is scene-level
+        // (`scene_video_prompt:scene_1`), the existing executor cascade
+        // wires the consumer to the scene-level node. Accept that as
+        // satisfied — otherwise Phase 2 false-positives every shot-level
+        // node whose matching dep happens to live one level coarser.
+        const prefix = `${dep.artifactTypeId}:`;
+        for (const d of currentDeps) {
+          if (!d.startsWith(prefix)) continue;
+          const depItemId = d.slice(prefix.length);
+          // d is `{type}:{depItemId}`. Treat as adequate if depItemId
+          // is a strict prefix of the consumer's itemId at an
+          // underscore boundary (so `scene_1` matches `scene_1_shot_3`
+          // but not `scene_10_shot_3`).
+          if (
+            node.itemId === depItemId ||
+            node.itemId.startsWith(depItemId + '_')
+          ) {
+            satisfied = true;
+            break;
+          }
+        }
+      }
     } else {
       if (currentDeps.has(dep.artifactTypeId)) {
         satisfied = true;
@@ -250,6 +274,30 @@ export function migrateGraphToTemplate(
           (d: ArtifactDependency) => d.artifactTypeId === parent.typeId && d.scope === 'matching',
         );
         if (!matchingDep) continue;
+
+        // Granularity guard: SCENE_GRANULARITY types (scene_video_prompt,
+        // scene_shot_plan) are per-scene by construction. If a parent
+        // gives us shot-level granularity (itemId looks like
+        // `scene_N_shot_M`), synthesizing `{depType}:scene_N_shot_M`
+        // would recreate the exact phantoms Phase 0 just deleted —
+        // closed loop, same bug.
+        //
+        // Skip. The scene-level synthesis will fire from this parent's
+        // own scene-level ancestor (e.g. scene_shot_plan:scene_N gets
+        // synthesized from scene:scene_N elsewhere in this iteration).
+        if (SCENE_GRANULARITY_TYPES.has(depTypeId) && isShotLevelItemId(parent.itemId)) {
+          continue;
+        }
+
+        // Don't synthesize a parent-level collection node when per-shot
+        // children of the same type already exist. The parent would be
+        // a redundant collection that, if expanded by the runtime,
+        // would overwrite the existing per-shot children.
+        const childPrefix = `${depTypeId}:${parent.itemId}_shot_`;
+        const hasPerShotChildren = executor.getAllNodes().some(
+          n => n.typeId === depTypeId && n.id.startsWith(childPrefix),
+        );
+        if (hasPerShotChildren) continue;
 
         const expectedId = `${depTypeId}:${parent.itemId}`;
         if (executor.getNode(expectedId)) continue; // already present

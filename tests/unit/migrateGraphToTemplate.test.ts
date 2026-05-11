@@ -311,4 +311,96 @@ describe('migrateGraphToTemplate', () => {
     expect(reloaded.getNode('scene_video_prompt:scene_1')).toBeDefined();
     expect(reloaded.getNode('scene_video_prompt:scene_2')).toBeDefined();
   });
+
+  // Regression: the previous synthesis logic re-created the phantoms
+  // Phase 0 had just deleted, because the template says
+  // `scene_video_prompt` has matching scope on `shot_breakdown` — and
+  // when `shot_breakdown:scene_1_shot_M` parents exist, the naive
+  // synthesis fired `scene_video_prompt:scene_1_shot_M`. Closed-loop
+  // bug; the migration's net effect was zero. Phase 1 now skips
+  // synthesizing SCENE_GRANULARITY types at shot-level granularity.
+  it('does NOT resurrect scene-granularity phantoms from shot-level parents (closed-loop guard)', () => {
+    const fresh = buildFreshExecutor();
+    fresh.expandCollection('scene', [{ itemId: 'scene_1', name: 'Scene 1' }]);
+
+    // Set up a realistic post-expansion shape: shot_breakdown got
+    // expanded into per-shot children. (We force this by injecting the
+    // shot-level parents directly.) Then drop the proper scene-level
+    // scene_video_prompt so we can observe synthesis behavior.
+    fresh.removeNode('scene_video_prompt:scene_1');
+    for (const m of [1, 2, 3]) {
+      fresh.addNode({
+        id: `shot_breakdown:scene_1_shot_${m}`,
+        typeId: 'shot_breakdown',
+        itemId: `scene_1_shot_${m}`,
+        status: 'pending',
+        displayName: `Shot Breakdown: scene_1 shot ${m}`,
+        isExpensive: false,
+        isCollection: false,
+        dependencies: ['scene_shot_plan:scene_1'],
+        dependents: [],
+      });
+    }
+
+    const reloaded = reloadUnderTemplate(fresh, narrativeTemplate);
+    const report = migrateGraphToTemplate(reloaded, narrativeTemplate);
+
+    // None of the shot-level phantoms got synthesised.
+    for (const m of [1, 2, 3]) {
+      expect(
+        reloaded.getNode(`scene_video_prompt:scene_1_shot_${m}`),
+        `scene_video_prompt:scene_1_shot_${m} must NOT be synthesized`,
+      ).toBeUndefined();
+    }
+    // The proper scene-level scene_video_prompt WAS synthesized
+    // (from scene_shot_plan:scene_1, which IS scene-level).
+    expect(reloaded.getNode('scene_video_prompt:scene_1')).toBeDefined();
+    // And it shows up in the report.
+    const synthIds = report.synthesized.map(s => s.id);
+    expect(synthIds).toContain('scene_video_prompt:scene_1');
+    expect(synthIds).not.toContain('scene_video_prompt:scene_1_shot_1');
+  });
+
+  // Regression: a follow-on of the closed-loop bug — Phase 1 was also
+  // synthesizing collection-parent nodes (e.g. shot_image_prompt:scene_1)
+  // when the per-shot children (shot_image_prompt:scene_1_shot_M) were
+  // already in the graph. The redundant parent, if later expanded by
+  // the runtime, would overwrite the per-shot children's status.
+  it('does NOT synthesize a scene-level parent when per-shot children of that type already exist', () => {
+    const fresh = buildFreshExecutor();
+    fresh.expandCollection('scene', [{ itemId: 'scene_1', name: 'Scene 1' }]);
+
+    // Realistic mid-pipeline shape: shot_image_prompt has been
+    // expanded into per-shot children already.
+    fresh.removeNode('shot_image_prompt:scene_1');
+    for (const m of [1, 2]) {
+      fresh.addNode({
+        id: `shot_image_prompt:scene_1_shot_${m}`,
+        typeId: 'shot_image_prompt',
+        itemId: `scene_1_shot_${m}`,
+        status: 'completed',
+        displayName: `Shot Composition: scene_1 shot ${m}`,
+        isExpensive: false,
+        isCollection: false,
+        dependencies: ['scene_video_prompt:scene_1'],
+        dependents: [],
+        outputPath: `prompts/images/shots/scene-1-shot-${m}.json`,
+      });
+    }
+
+    const reloaded = reloadUnderTemplate(fresh, narrativeTemplate);
+    const report = migrateGraphToTemplate(reloaded, narrativeTemplate);
+
+    // shot_image_prompt:scene_1 (the parent collection) MUST NOT be
+    // re-created — the per-shot children own the work now. A
+    // re-created parent, if later expanded by the runtime, would
+    // overwrite the per-shot children's status.
+    expect(reloaded.getNode('shot_image_prompt:scene_1')).toBeUndefined();
+    const synthIds = report.synthesized.map(s => s.id);
+    expect(synthIds).not.toContain('shot_image_prompt:scene_1');
+    // The per-shot children still exist (status may shift if other deps
+    // got rewired in Phase 2 — out of scope for this test).
+    expect(reloaded.getNode('shot_image_prompt:scene_1_shot_1')).toBeDefined();
+    expect(reloaded.getNode('shot_image_prompt:scene_1_shot_2')).toBeDefined();
+  });
 });
