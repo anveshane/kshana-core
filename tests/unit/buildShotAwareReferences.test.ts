@@ -223,3 +223,105 @@ describe('buildShotAwareReferences: no setting case', () => {
     expect(result[0]?.imageNumber).toBe(1);
   });
 });
+
+// ──────────────────────────────────────────────────────────────────────
+// Atmosphere / cutaway / insert guard.
+//
+// Bug evidenced by Dream shot 3: a god-perspective macro close-up on
+// "blue phosphorescent seam" — purely an object/atmosphere shot with
+// no characters in frame. The pre-fix code unconditionally pulled in
+// mainSubject (protagonist), the validateRefMentions check demanded
+// the LLM reference protagonist, the LLM correctly omitted it (the
+// shot has no characters), and we hit an infinite retry loop.
+//
+// New rule: when perspective is non-character-POV (god / overhead)
+// AND no character ref appears in focus.primary / focus.background[]
+// / focus.lurking, don't fall back to mainSubject. Return the setting
+// (if any) and nothing else.
+// ──────────────────────────────────────────────────────────────────────
+describe('buildShotAwareReferences — atmosphere / cutaway guard', () => {
+  it('a god-perspective shot with focus.primary = a prose label returns NO refs (Dream shot 3)', async () => {
+    const { buildShotAwareReferences } = await import('../../src/core/planner/shotReferenceMapping.js');
+    const result = buildShotAwareReferences(allRefsFixture, {
+      mainSubject: 'protagonist',
+      focusPrimary: 'blue phosphorescent seam', // prose, not a known ref
+      focusBackground: [],
+      focusLurking: null,
+      perspective: 'god',
+      purpose: 'show_tension',
+    });
+    expect(result.map(r => r.refId)).toEqual([]);
+  });
+
+  it('a god-perspective shot with focus.primary = a known setting returns just the setting', async () => {
+    const { buildShotAwareReferences } = await import('../../src/core/planner/shotReferenceMapping.js');
+    const result = buildShotAwareReferences(allRefsFixture, {
+      mainSubject: 'protagonist',
+      focusPrimary: 'forest',
+      focusBackground: [],
+      focusLurking: null,
+      perspective: 'god',
+      purpose: 'set_the_world',
+    });
+    expect(result.map(r => r.refId)).toEqual(['setting_image:forest']);
+  });
+
+  it('overhead perspective + no character refs returns just the setting', async () => {
+    const { buildShotAwareReferences } = await import('../../src/core/planner/shotReferenceMapping.js');
+    const result = buildShotAwareReferences(allRefsFixture, {
+      mainSubject: 'protagonist',
+      focusPrimary: 'forest',
+      focusBackground: [],
+      focusLurking: null,
+      perspective: 'overhead',
+      purpose: 'set_the_world',
+    });
+    expect(result.map(r => r.refId)).toEqual(['setting_image:forest']);
+  });
+
+  it('god-perspective shot WITH a character in focus.primary still includes that character', async () => {
+    // A god shot framed on a specific character is still a character
+    // shot — perspective is the camera position, not a statement that
+    // there are no people in the frame.
+    const { buildShotAwareReferences } = await import('../../src/core/planner/shotReferenceMapping.js');
+    const result = buildShotAwareReferences(allRefsFixture, {
+      mainSubject: 'protagonist',
+      focusPrimary: 'protagonist',
+      focusBackground: [],
+      focusLurking: null,
+      perspective: 'god',
+      purpose: 'meet_character',
+    });
+    expect(result.map(r => r.refId)).toContain('character_image:protagonist');
+  });
+
+  it('god-perspective shot with a character in focus.background still includes that character', async () => {
+    const { buildShotAwareReferences } = await import('../../src/core/planner/shotReferenceMapping.js');
+    const result = buildShotAwareReferences(allRefsFixture, {
+      mainSubject: 'protagonist',
+      focusPrimary: 'forest',
+      focusBackground: ['protagonist'],
+      focusLurking: null,
+      perspective: 'god',
+      purpose: 'show_action',
+    });
+    expect(result.map(r => r.refId)).toEqual(
+      expect.arrayContaining(['setting_image:forest', 'character_image:protagonist']),
+    );
+  });
+
+  it('main_subject perspective is NOT affected — still falls back to mainSubject (existing behavior)', async () => {
+    // The guard is gated on perspective=god/overhead specifically.
+    // Don't regress the normal "follow mainSubject" path.
+    const { buildShotAwareReferences } = await import('../../src/core/planner/shotReferenceMapping.js');
+    const result = buildShotAwareReferences(allRefsFixture, {
+      mainSubject: 'protagonist',
+      focusPrimary: 'some prose label',
+      focusBackground: [],
+      focusLurking: null,
+      perspective: 'main_subject',
+      purpose: 'show_reaction',
+    });
+    expect(result.map(r => r.refId)).toContain('character_image:protagonist');
+  });
+});

@@ -344,6 +344,12 @@ export interface ShotContext {
   focusBackground?: string[];
   focusLurking?: string | null;
   purpose?: string;
+  /** Shot's perspective (POV): 'main_subject' | 'secondary_subject' |
+   *  'observer' | 'overhead' | 'god'. Used by buildShotAwareReferences
+   *  to detect non-character-POV shots (god / overhead) so the
+   *  mainSubject fall-back doesn't force a character into refs for
+   *  atmosphere / cutaway shots that deliberately don't include one. */
+  perspective?: string;
   /** Shot's `continuityRole` field: 'none' | 'entry' | 'exit' | 'bridge'. */
   continuityRole?: string;
   /** Scene-level `entry` string — declared on the scene_video_prompt to
@@ -401,6 +407,7 @@ export function readShotContextFromSvp(
     focusBackground: Array.isArray(focus.background) ? focus.background : [],
     focusLurking: focus.lurking ?? null,
     purpose: shot.purpose ?? '',
+    perspective: shot.perspective ?? '',
     continuityRole: shot.continuityRole ?? 'none',
     sceneEntry: typeof parsed?.entry === 'string' ? parsed.entry : null,
   };
@@ -432,6 +439,35 @@ export function buildShotAwareReferences(
         chosenSetting = r;
         break;
       }
+    }
+  }
+
+  // Atmosphere / cutaway / insert shot guard. When the shot has NO
+  // character references anywhere (focus.primary isn't a known character
+  // ref, focus.background[] / focus.lurking have no character refs)
+  // AND its perspective is non-character-POV (god / overhead), the
+  // mainSubject fall-back below would force the scene's protagonist into
+  // refs even though the shot is deliberately a non-character beat —
+  // a macro close-up on a prop, a high-angle establishing shot of an
+  // empty room, etc. The validator then demands the LLM mention the
+  // protagonist, the LLM correctly omits it (because the shot isn't
+  // about them), and we hit a stuck retry loop. Skip the fall-back
+  // and return just the setting (if any) for these shots.
+  const NON_CHARACTER_POV = new Set(['god', 'overhead']);
+  if (NON_CHARACTER_POV.has(shot.perspective ?? '')) {
+    const charRefInFocus = (name?: string | null): boolean => {
+      if (!name) return false;
+      const r = byLabel.get(name);
+      return r != null && r.type !== 'setting';
+    };
+    const anyCharInShotContext =
+      charRefInFocus(shot.focusPrimary) ||
+      focusBg.some(charRefInFocus) ||
+      charRefInFocus(shot.focusLurking ?? null);
+    if (!anyCharInShotContext) {
+      return chosenSetting
+        ? [{ ...chosenSetting, imageNumber: 1 }]
+        : [];
     }
   }
 
