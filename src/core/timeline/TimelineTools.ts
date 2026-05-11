@@ -949,7 +949,7 @@ The timeline must be fully validated (all segments filled) before assembly.`,
         let desktopResult: TimelineAssemblyResult;
         try {
           desktopResult = await desktopAssemblyBroker.requestTimelineAssembly(
-            sessionId!,
+            sessionId,
             buildDesktopAssemblyPayload(timeline, projectDir, resolution.resolved, outputName),
           );
         } catch (err) {

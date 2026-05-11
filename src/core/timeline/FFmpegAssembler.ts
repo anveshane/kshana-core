@@ -232,7 +232,7 @@ export function resolveSegmentFilePaths(
         if (!absolutePath) {
           const bundles = manifest.filter(a => {
             if (a.type !== 'scene_video') return false;
-            const meta = (a.metadata ?? {}) as Record<string, unknown>;
+            const meta = (a.metadata ?? {});
             return meta['isBundle'] === true && meta['sceneNumber'] === segmentNum;
           });
           if (bundles.length > 0) {
@@ -242,7 +242,7 @@ export function resolveSegmentFilePaths(
             // metadata) implicitly cover everything in the scene.
             const matchingChunk = bundles.find(a => {
               if (shotNum === undefined) return true;
-              const meta = (a.metadata ?? {}) as Record<string, unknown>;
+              const meta = (a.metadata ?? {});
               const covers = meta['coversShots'];
               if (!Array.isArray(covers)) return true;
               return covers.includes(shotNum);

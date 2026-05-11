@@ -86,14 +86,14 @@ function parseSinglePlacementResponse(raw: string, placementNumber: number): Com
   if (!item || typeof item['placementNumber'] !== 'number') {
     throw new Error(`Each placement must have a numeric placementNumber. Got: ${JSON.stringify(item)}`);
   }
-  if (typeof item['componentCode'] !== 'string' || (item['componentCode'] as string).length === 0) {
+  if (typeof item['componentCode'] !== 'string' || (item['componentCode']).length === 0) {
     throw new Error(
       `Placement ${item['placementNumber']} must have a non-empty componentCode string. Found keys: ${Object.keys(item).join(', ')}`
     );
   }
   return {
-    placementNumber: item['placementNumber'] as number,
-    componentCode: item['componentCode'] as string,
+    placementNumber: item['placementNumber'],
+    componentCode: item['componentCode'],
   };
 }
 

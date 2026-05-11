@@ -497,7 +497,7 @@ The goal is stored in project.json and read on session resume.`,
         mutableProject['targetDuration'] = preferences.duration;
       }
       if (typeof preferences.style === 'string' && preferences.style) {
-        project.style = preferences.style as GenericProjectFile['style'];
+        project.style = preferences.style;
       }
 
       // Clear completion state so the nudge loop and workflow resume

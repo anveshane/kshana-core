@@ -108,7 +108,7 @@ export function resolvePiSessionModel(): Model<string> {
   // which bypasses LLMLogger — without this log line there is NO
   // observable signal of which baseUrl/model pi-agent is hitting.
   // Print to stdout so it lands in the desktop's electron-log capture.
-  // eslint-disable-next-line no-console
+   
   console.log(
     `[resolvePiSessionModel] api=${model.api} provider=${model.provider} ` +
       `id=${model.id} baseUrl=${(model as { baseUrl?: string }).baseUrl ?? '(default)'}`,
