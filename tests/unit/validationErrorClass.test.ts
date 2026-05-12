@@ -1,13 +1,20 @@
 /**
  * GIVEN a validation error from validateJsonOutput
  * WHEN classifyValidationError inspects it
- * THEN structural failures (bad JSON / missing fields) → 'structural'
- *      and semantic failures (well-formed JSON violating project rules)
- *      → 'semantic'.
+ * THEN it returns one of three classes:
+ *   - 'truncated'  — LLM output cut off mid-stream (Unexpected end of JSON
+ *                    / Unterminated string). Must skip json_repair.
+ *   - 'structural' — well-formed-ish JSON with fix-able syntax / schema
+ *                    issues (trailing comma, missing required field, type
+ *                    mismatch). json_repair can plausibly help.
+ *   - 'semantic'   — JSON parses + matches the schema but violates a
+ *                    project rule (hallucinated refs, OTS-with-one-char,
+ *                    shotNumber mismatch). Skip json_repair.
+ *
  * AND the retry-suffix builder produces class-appropriate guidance:
- *      structural retries get a generic JSON reminder, semantic retries
- *      get the actual validation message injected so the LLM has a
- *      specific thing to correct.
+ *   - structural → generic JSON reminder
+ *   - semantic   → inject the validation message verbatim
+ *   - truncated  → inject + tell the LLM to keep fields short
  */
 import { describe, it, expect } from 'vitest';
 import {
@@ -15,22 +22,28 @@ import {
   buildRetrySystemSuffix,
 } from '../../src/core/planner/validationErrorClass.js';
 
-describe('classifyValidationError — structural', () => {
-  it('classifies a JSON.parse SyntaxError as structural', () => {
-    expect(
-      classifyValidationError('JSON parse error: SyntaxError: Unexpected token } in JSON at position 42'),
-    ).toBe('structural');
-  });
-
-  it('classifies an unterminated-string parse error as structural', () => {
-    expect(
-      classifyValidationError('JSON parse error: SyntaxError: Unterminated string in JSON at position 1023'),
-    ).toBe('structural');
-  });
-
-  it('classifies an unexpected-end-of-input parse error as structural', () => {
+describe('classifyValidationError — truncated', () => {
+  it('classifies "Unexpected end of JSON input" as truncated (NOT structural)', () => {
+    // Regression: this used to route to json_repair and produced
+    // stub plans like { sceneTitle: "Default scene", shotPlan: [...
+    // "Default shot." ] } when Stage A truncated. Repair can't recover
+    // missing tokens; it just invents schema-satisfying filler.
     expect(
       classifyValidationError('JSON parse error: SyntaxError: Unexpected end of JSON input'),
+    ).toBe('truncated');
+  });
+
+  it('classifies "Unterminated string" as truncated', () => {
+    expect(
+      classifyValidationError('JSON parse error: SyntaxError: Unterminated string in JSON at position 1023'),
+    ).toBe('truncated');
+  });
+});
+
+describe('classifyValidationError — structural', () => {
+  it('classifies a generic JSON.parse SyntaxError (non-truncation) as structural', () => {
+    expect(
+      classifyValidationError('JSON parse error: SyntaxError: Unexpected token } in JSON at position 42'),
     ).toBe('structural');
   });
 
@@ -122,5 +135,15 @@ describe('buildRetrySystemSuffix', () => {
     // semantic; the retry suffix shouldn't crash.
     const suffix = buildRetrySystemSuffix('semantic', '');
     expect(suffix).toContain('REJECTED');
+  });
+
+  it('truncated retries inject the parser error AND coach the LLM to keep fields short', () => {
+    const err = 'JSON parse error: SyntaxError: Unexpected end of JSON input';
+    const suffix = buildRetrySystemSuffix('truncated', err);
+    // The actual parser message lands in the prompt so the model knows
+    // why we're retrying.
+    expect(suffix).toContain(err);
+    // The targeted directive: shorten verbose fields to fit the budget.
+    expect(suffix).toMatch(/short|keep .* concise|under \d+/i);
   });
 });

@@ -42,6 +42,13 @@ import { enforceAnchorMode } from './enforceAnchorMode.js';
 import { getPreviousShotIdAcrossScenes } from './crossShotChaining.js';
 import { shouldExpandSceneCollectionToShots } from './collectionExpansion.js';
 import {
+  diffShotPlanAgainstGraph,
+  perShotNodeIds,
+  planShotNumbersFromJson,
+} from './reconcileShotPlan.js';
+import { buildOutputContractBlock } from './buildOutputContractBlock.js';
+import { reconcileGraphHygiene, summariseHygieneResult } from './reconcileGraphHygiene.js';
+import {
   normalizeShotImagePrompt as normalizeShotImagePromptFrame,
   normalizeShotImagePromptWithRefs,
   alignFramesToFirstFrame,
@@ -49,6 +56,7 @@ import {
   type AvailableRefMinimal,
 } from './shotImagePromptNormalizer.js';
 import { extractCollectionItems } from './collectionExtractor.js';
+import { listCollectionItemsFromDisk } from './collectionResumeFromDisk.js';
 import { extractStoryEssence, type StoryEssence } from './storyEssenceExtractor.js';
 import { buildStoryEssenceBlock } from './storyEssenceContextBlock.js';
 import { canonicalShotVideoDeps, sanitizeShotVideoDeps } from './shotVideoCanonicalDeps.js';
@@ -161,18 +169,6 @@ export interface ExecutorAgentConfig {
    * Used for testing — validates prompt structure without calling image/video providers.
    */
   skipMediaGeneration?: boolean;
-  /**
-   * Master switch for vision-LLM calls (the in-executor
-   * `reviewImageWithVLM` retry-once gate AND any sibling oversight
-   * describe-call). When `true` (or undefined → defaults to !DISABLE_VLM
-   * env), VLM is allowed. When `false`, VLM is skipped end-to-end —
-   * the runtime gate enforced by ConversationManager
-   * (`piOversight && vlmJudge`).
-   *
-   * Live-toggleable via `setVLMEnabled()` so flipping the UI mid-run
-   * affects subsequent shots immediately.
-   */
-  vlmEnabled?: boolean;
 }
 
 interface ParsedSceneBreakdownShot {
@@ -272,6 +268,16 @@ export class ExecutorAgent extends TypedEventEmitter {
   private running = false;
   private stopped = false;
   /**
+   * Per-run cancel handle. Reset at the top of every `run()` so a
+   * stop from a previous run doesn't leak into the next one. The
+   * signal is threaded into every `generateForNode` LLM call so
+   * `stop()` aborts in-flight streams immediately — without this,
+   * reasoning-model streams (1-7 min per call) keep running until
+   * natural completion or their internal 200s self-timeout, which
+   * made cancel feel broken.
+   */
+  private runAbortController: AbortController = new AbortController();
+  /**
    * Resolved typeIds for the current `/run-to <stage>` gate. Null when no
    * gate is active. Set from config.stopAtStage at construction time and
    * from `setStopAtStage(stage | null)` at runtime per-task.
@@ -291,17 +297,6 @@ export class ExecutorAgent extends TypedEventEmitter {
    * so the UI can show the right banner.
    */
   private stopReason: 'complete' | 'paused_at_stage' | 'cancelled' | 'failed' | null = null;
-  /**
-   * Inverted config field — internal code already says
-   * "if vlmDisabled skip" all over executeShotImage. Source of
-   * truth: constructor `config.vlmEnabled` (the master switch
-   * resolved from the process-wide `oversightState` global by the
-   * runner singleton). Mutated at runtime by `setVLMEnabled` and by
-   * the 404 self-shutoff in the retry loop. The legacy `DISABLE_VLM`
-   * env shortcut is no longer honored — toggle VLM via the desktop
-   * Settings panel or chat-header toggle.
-   */
-  private vlmDisabled: boolean = false;
   /**
    * Loaded from prompts/story_essence.json after the story_essence node
    * completes (or at startup if the file already exists). Threaded into
@@ -387,12 +382,6 @@ export class ExecutorAgent extends TypedEventEmitter {
     }
     if (config.stopAfterNode) {
       this.stopAfterNodeId = config.stopAfterNode;
-    }
-    // Resolve initial vlmDisabled. Explicit config wins over env so
-    // ConversationManager's runtime gate (`piOversight && vlmJudge`)
-    // can authoritatively force-off without depending on env state.
-    if (typeof config.vlmEnabled === 'boolean') {
-      this.vlmDisabled = !config.vlmEnabled;
     }
     // Build per-call router. When LLM_ROUTING_ENABLED=false (default), every
     // purpose resolves to the default client so behavior is unchanged.
@@ -922,6 +911,13 @@ export class ExecutorAgent extends TypedEventEmitter {
   stop(): void {
     this.stopped = true;
     this.stopReason = 'cancelled';
+    // Abort in-flight LLM streams immediately. Without this, a
+    // reasoning-model call (1-7 min wall-clock for DeepSeek-R /
+    // o-series / Gemini-thinking) keeps running until natural
+    // completion or its internal 200s self-timeout, making the
+    // user-facing Cancel feel broken. The runAbortController.signal
+    // is threaded into every generateForNode LLM call.
+    this.runAbortController.abort();
     // Interrupt any in-progress ComfyUI generation immediately
     import('../../services/comfyui/ComfyUIClient.js')
       .then(({ ComfyUIClient }) => new ComfyUIClient({}).interrupt())
@@ -945,20 +941,6 @@ export class ExecutorAgent extends TypedEventEmitter {
     this.redoOnlyNodes = ids === null ? null : new Set(ids);
   }
 
-  /**
-   * Live-toggle vision-LLM calls. The next `executeShotImage` shot
-   * picks up the new value at the `if (this.vlmDisabled)` gate.
-   * Used by ConversationManager when the user flips the VLM header
-   * toggle mid-run — switching off mid-run skips review for any
-   * subsequent shot but doesn't interrupt the in-flight one.
-   *
-   * Notes on layering: the runtime constraint
-   * `piOversight && vlmJudge` is computed by ConversationManager;
-   * this setter only sees the resolved boolean.
-   */
-  setVLMEnabled(enabled: boolean): void {
-    this.vlmDisabled = !enabled;
-  }
 
   /**
    * Set or clear the `/run-to <stage>` gate at runtime. Pass a stage name
@@ -1776,6 +1758,306 @@ export class ExecutorAgent extends TypedEventEmitter {
     throw new Error(message);
   }
 
+  /**
+   * Prune per-shot graph children whose shotNumber is no longer in the
+   * scene's `scene_shot_plan` output. Returns `true` if any node was
+   * removed so the caller can re-run dependent passes.
+   *
+   * Pure decision logic (which shots are stale) lives in
+   * `reconcileShotPlan.ts`; this method does the file read and graph
+   * mutation. The set of per-shot types we remove is the full chain
+   * (`shot_breakdown` through `shot_video`) — leaving a downstream
+   * orphan would tie the assembler in knots, the same way the bug
+   * this fixes did.
+   *
+   * Plans that GROW (new shotNumbers that aren't in the graph yet)
+   * are detected too, but only logged for now — the executor's
+   * existing "spawn missing per-shot chain" path requires the parent
+   * collection node, which doesn't exist after the first expansion.
+   * Emit a notification so the user can redo from "Scene breakdowns"
+   * (one step deeper) to force a fresh expansion if needed.
+   */
+  private reconcilePerShotChildrenForScene(
+    planNode: ExecutionNode,
+    sceneId: string,
+  ): boolean {
+    if (!planNode.outputPath) return false;
+    let planJson: unknown;
+    try {
+      const fullPath = join(this.config.projectDir, planNode.outputPath);
+      let content = readFileSync(fullPath, 'utf-8').trim();
+      if (content.startsWith('```')) {
+        content = content.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '');
+      }
+      planJson = JSON.parse(content);
+    } catch {
+      // Plan unreadable / malformed — leave the graph alone. The
+      // normal expand path will report the error when it tries.
+      return false;
+    }
+    const planShotNums = planShotNumbersFromJson(planJson);
+    if (planShotNums.size === 0) return false;
+
+    const childPrefix = `${sceneId}_shot_`;
+    const graphShotNums = new Set<number>();
+    for (const candidate of this.executor.getAllNodes()) {
+      if (candidate.typeId !== 'shot_breakdown') continue;
+      if (!candidate.itemId?.startsWith(childPrefix)) continue;
+      const m = candidate.itemId.match(/_shot_(\d+)$/);
+      if (!m || !m[1]) continue;
+      graphShotNums.add(parseInt(m[1], 10));
+    }
+    if (graphShotNums.size === 0) {
+      // No per-shot children yet; the regular expansion path will
+      // create them. Nothing to reconcile.
+      return false;
+    }
+
+    const diff = diffShotPlanAgainstGraph(planShotNums, graphShotNums);
+    if (diff.stale.length === 0 && diff.missing.length === 0) {
+      return false;
+    }
+
+    let mutated = false;
+    for (const shotNum of diff.stale) {
+      const removedIds: string[] = [];
+      for (const nodeId of perShotNodeIds(sceneId, shotNum)) {
+        if (this.executor.removeNode(nodeId)) removedIds.push(nodeId);
+      }
+      if (removedIds.length > 0) {
+        mutated = true;
+        this.log(
+          `  Pruned ${removedIds.length} stale per-shot node(s) for ${sceneId} shot ${shotNum} (not in updated plan): ${removedIds.join(', ')}`,
+        );
+        this.emit({
+          type: 'notification',
+          level: 'info',
+          message: `Pruned shot ${shotNum} of ${sceneId} — the updated plan no longer includes it.`,
+        });
+      }
+    }
+
+    if (diff.missing.length > 0) {
+      // Plan grew — the new plan introduces shotNumbers that have no
+      // per-shot graph chain yet. Spawn each missing shot's full chain
+      // (shot_breakdown, motion, image_prompt, image, last_frame,
+      // video) and wire it into the scene's existing parents. Then
+      // reset scene_video_prompt:scene_N to pending so the assembler
+      // re-runs once the new shot_breakdown nodes complete.
+      const planShotPlan = (planJson as { shotPlan?: Array<{ shotNumber?: number; oneLineSummary?: string }> }).shotPlan ?? [];
+      let spawnedAny = false;
+      for (const shotNum of diff.missing) {
+        const entry = planShotPlan.find((p) => p?.shotNumber === shotNum);
+        const summary = typeof entry?.oneLineSummary === 'string'
+          ? entry.oneLineSummary.substring(0, 60)
+          : `shot ${shotNum}`;
+        const added = this.spawnMissingPerShotChain(sceneId, shotNum, summary);
+        if (added.length > 0) {
+          spawnedAny = true;
+          mutated = true;
+          this.log(
+            `  Spawned per-shot chain for ${sceneId} shot ${shotNum}: ${added.join(', ')}`,
+          );
+          this.emit({
+            type: 'notification',
+            level: 'info',
+            message: `Spawned shot ${shotNum} of ${sceneId} — the updated plan added it.`,
+          });
+        }
+      }
+      // The assembler likely failed because of the missing shots
+      // (status='failed' after exhausting retries). Reset it back to
+      // pending so the executor schedules a fresh assembly once the
+      // new shot_breakdown deps complete. Mirror the same flip on
+      // scene_shot_plan's downstream cascade so anything else that
+      // looked at the failed state can recover too.
+      if (spawnedAny) {
+        const svp = this.executor.getNode(`scene_video_prompt:${sceneId}`);
+        if (svp && (svp.status === 'failed' || svp.status === 'skipped')) {
+          svp.status = 'pending';
+          this.log(`  Reset ${svp.id} from ${svp.status} to pending so the assembler retries with new shot deps`);
+        }
+      }
+    }
+
+    return mutated;
+  }
+
+  /**
+   * Build the full per-shot graph chain for ONE shot (six nodes:
+   * shot_breakdown, shot_motion_directive, shot_image_prompt,
+   * shot_image, shot_image_last_frame, shot_video). Wires deps both
+   * directions. Skips any node that already exists (idempotent).
+   *
+   * Used by `reconcilePerShotChildrenForScene` when the updated plan
+   * introduces a shotNumber that has no graph chain yet — after the
+   * first per-scene expansion, the parent collection nodes are gone
+   * and there's no longer a single seam where the executor would
+   * spawn them. This is that seam.
+   *
+   * Mirrors the inline chain-creation in `expandPendingCollections`
+   * (~line 4209), reusing the same `addShotImageNodes` helper for the
+   * image-pair so anchor logic stays in one place.
+   *
+   * Returns the ids of the nodes actually added (in spawn order).
+   */
+  private spawnMissingPerShotChain(
+    sceneId: string,
+    shotNumber: number,
+    shotName: string,
+  ): string[] {
+    const itemId = `${sceneId}_shot_${shotNumber}`;
+    const added: string[] = [];
+
+    const wireUpstream = (childId: string, parentIds: string[]) => {
+      for (const parentId of parentIds) {
+        const parent = this.executor.getNode(parentId);
+        if (parent && !parent.dependents.includes(childId)) {
+          parent.dependents.push(childId);
+        }
+      }
+    };
+
+    // 1. shot_breakdown (Stage B LLM call) — deps from template.
+    const shotBreakdownId = `shot_breakdown:${itemId}`;
+    if (!this.executor.getNode(shotBreakdownId)) {
+      const deps = [`scene_shot_plan:${sceneId}`, 'world_style'];
+      this.executor.addNode({
+        id: shotBreakdownId,
+        typeId: 'shot_breakdown',
+        itemId,
+        status: 'pending',
+        displayName: `Shot Breakdown: ${shotName}`,
+        isExpensive: false,
+        isCollection: false,
+        dependencies: deps,
+        dependents: [],
+      });
+      wireUpstream(shotBreakdownId, deps);
+      added.push(shotBreakdownId);
+    }
+
+    // 2. shot_motion_directive — depends on shot_breakdown.
+    const motionId = `shot_motion_directive:${itemId}`;
+    if (!this.executor.getNode(motionId)) {
+      const deps = [shotBreakdownId];
+      this.executor.addNode({
+        id: motionId,
+        typeId: 'shot_motion_directive',
+        itemId,
+        status: 'pending',
+        displayName: `Shot Motion: ${shotName}`,
+        isExpensive: false,
+        isCollection: false,
+        dependencies: deps,
+        dependents: [],
+      });
+      wireUpstream(motionId, deps);
+      added.push(motionId);
+    }
+
+    // 3. shot_image_prompt — depends on scene_video_prompt + world_style
+    //    only. Reference images (character_image, setting_image) are
+    //    resolved by refId at ComfyUI generation time, NOT at prompt
+    //    generation time — see narrative.ts shotImagePromptArtifact
+    //    deps for the canonical wiring. Including character/setting
+    //    image deps here was wrong and produced a serial-mode deadlock:
+    //    shot_image_prompt is `content`, character/setting images are
+    //    `visual_ref` (media), so the executor's "content first, then
+    //    media" gate refuses to start the media until content drains —
+    //    but content was waiting on media → no-progress.
+    const shotImagePromptId = `shot_image_prompt:${itemId}`;
+    if (!this.executor.getNode(shotImagePromptId)) {
+      const deps = [
+        `scene_video_prompt:${sceneId}`,
+        'world_style',
+      ];
+      this.executor.addNode({
+        id: shotImagePromptId,
+        typeId: 'shot_image_prompt',
+        itemId,
+        status: 'pending',
+        displayName: `Shot Composition: ${shotName}`,
+        isExpensive: false,
+        isCollection: false,
+        dependencies: deps,
+        dependents: [],
+      });
+      wireUpstream(shotImagePromptId, deps);
+      added.push(shotImagePromptId);
+    }
+
+    // 4 + 5. shot_image + shot_image_last_frame via the shared helper
+    //   (handles firstFrameAnchor → prior-frame dep). We don't know
+    //   the anchor yet (assembler stamps it later), so pass null —
+    //   the helper falls back to chaining on the previous shot's
+    //   first frame when present.
+    const shotImageId = `shot_image:${itemId}`;
+    if (!this.executor.getNode(shotImageId)) {
+      const allCharImageIds = this.executor.getAllNodes()
+        .filter((n) => n.typeId === 'character_image' && n.itemId)
+        .map((n) => n.id);
+      const allSettingImageIds = this.executor.getAllNodes()
+        .filter((n) => n.typeId === 'setting_image' && n.itemId)
+        .map((n) => n.id);
+      let prevShotImageId: string | null = null;
+      for (let prev = shotNumber - 1; prev >= 1; prev -= 1) {
+        const candidate = `shot_image:${sceneId}_shot_${prev}`;
+        if (this.executor.getNode(candidate)) {
+          prevShotImageId = candidate;
+          break;
+        }
+      }
+      addShotImageNodes({
+        executor: this.executor,
+        shot: { itemId, name: shotName },
+        allCharImageIds,
+        allSettingImageIds,
+        prevShotImageId,
+        firstFrameAnchor: null,
+        sceneId,
+      });
+      added.push(shotImageId, `shot_image_last_frame:${itemId}`);
+    }
+
+    // 6. shot_video — depends on shot_image_last_frame + motion.
+    //    Skip the V2V prev-shot edge: it's only added on initial
+    //    expansion when useV2V is on; reconstructing it here without
+    //    re-running the whole scene's chain risks cascade-invalidating
+    //    sibling shots. The user can re-run the scene to pick up
+    //    full V2V chaining if they want it.
+    const shotVideoId = `shot_video:${itemId}`;
+    if (!this.executor.getNode(shotVideoId)) {
+      const deps = [`shot_image_last_frame:${itemId}`, motionId];
+      this.executor.addNode({
+        id: shotVideoId,
+        typeId: 'shot_video',
+        itemId,
+        status: 'pending',
+        displayName: `Shot Videos: ${shotName}`,
+        isExpensive: true,
+        isCollection: false,
+        dependencies: deps,
+        dependents: [],
+      });
+      wireUpstream(shotVideoId, deps);
+      added.push(shotVideoId);
+    }
+
+    // Wire the new shot_breakdown into scene_video_prompt's deps so
+    // the assembler waits on it. (scene_video_prompt is a single
+    // per-scene node — it aggregates ALL shot_breakdowns for the
+    // scene.) Skip if already wired.
+    const svp = this.executor.getNode(`scene_video_prompt:${sceneId}`);
+    if (svp && !svp.dependencies.includes(shotBreakdownId)) {
+      svp.dependencies.push(shotBreakdownId);
+      const sb = this.executor.getNode(shotBreakdownId);
+      if (sb && !sb.dependents.includes(svp.id)) sb.dependents.push(svp.id);
+    }
+
+    return added;
+  }
+
   private reconcileCompletedSceneTimelineSegments(): void {
     const completedScenePrompts = this.executor.getAllNodes()
       .filter(n => n.typeId === 'scene_video_prompt' && n.itemId && n.status === 'completed');
@@ -1936,6 +2218,10 @@ export class ExecutorAgent extends TypedEventEmitter {
 
     this.running = true;
     this.stopped = false;
+    // Fresh AbortController per run — discard any aborted signal from
+    // a prior cancelled run so LLM calls in this run aren't aborted
+    // before they start.
+    this.runAbortController = new AbortController();
 
     // Load existing timeline from disk (survives session resume / server restart)
     if (!this.timeline) {
@@ -2690,8 +2976,17 @@ export class ExecutorAgent extends TypedEventEmitter {
                   });
 
                   // Step 1 (structural only): try json_repair. Skipped
-                  // for semantic failures — repair can't fix what isn't
-                  // a JSON-syntax issue, and a wasted LLM call is real.
+                  // for semantic AND truncated failures — repair can't
+                  // fix either: semantic JSON is already valid syntax,
+                  // and truncated input has missing content that
+                  // repair would AUTHOR as filler (we hit this exact
+                  // bug on Stage A when "Unexpected end of JSON" was
+                  // classified as structural and repair produced a
+                  // stub plan with "Default scene"/"Default shot.").
+                  // Both classes fall through to the full retry which
+                  // has the original scene-script + available_refs +
+                  // output_contract context, so it can author content
+                  // — not just patch syntax.
                   if (errorClass === 'structural') {
                     const repairCallId = `repair_${node.id}_${Date.now()}`;
                     this.emit({
@@ -3222,11 +3517,12 @@ How to use this list:
    \`description\`/\`audio\`. Don't invent a new refId.
 
 Examples of common failure modes to avoid:
-- Inserting \`glitch\` (the apartment cat) as secondarySubject of a
-  dock-confrontation scene just because glitch is on this list.
-- Setting \`focus.primary\` to \`lazarus_drive\` when the shot's
-  description is about guards raising rifles — the Drive isn't yet
-  the subject of that shot.
+- Inserting a refId as secondarySubject just because it's listed
+  here, even though the scene script doesn't bring that character
+  into the action of THIS scene.
+- Setting \`focus.primary\` to a prop or object refId when the shot's
+  description is about something else entirely — focus must name
+  what the shot is actually about, not a random pick from this list.
 </available_refs>`;
       }
     }
@@ -3683,9 +3979,16 @@ Examples of common failure modes to avoid:
       }
     }
 
+    // Hard post-anchor for Stage A/B (scene_shot_plan + shot_breakdown):
+    // forces the model to ground every refId in the scene script + the
+    // canonical <available_refs> block — never in the demonstration
+    // tokens it just saw inside the loaded skill guides. See
+    // buildOutputContractBlock.ts for the rationale and full text.
+    const outputContractBlock = buildOutputContractBlock(node.typeId);
+
     const user = inputs.contextBlock
-      ? `${task}${projectContext}${availableRefsBlock}${referenceImageContext}${sceneStateContext}${characterTagsBlock}${perspectiveContext}${focusContext}${shotContextHint}${storyEssenceBlock}${sceneAssignment}${motionAudioContext}${shotBreakdownPlanBlock}\n\n${inputs.contextBlock}`
-      : `${task}${projectContext}${availableRefsBlock}${referenceImageContext}${sceneStateContext}${characterTagsBlock}${perspectiveContext}${focusContext}${shotContextHint}${storyEssenceBlock}${sceneAssignment}${motionAudioContext}${shotBreakdownPlanBlock}`;
+      ? `${task}${projectContext}${availableRefsBlock}${referenceImageContext}${sceneStateContext}${characterTagsBlock}${perspectiveContext}${focusContext}${shotContextHint}${storyEssenceBlock}${sceneAssignment}${motionAudioContext}${shotBreakdownPlanBlock}\n\n${inputs.contextBlock}${outputContractBlock}`
+      : `${task}${projectContext}${availableRefsBlock}${referenceImageContext}${sceneStateContext}${characterTagsBlock}${perspectiveContext}${focusContext}${shotContextHint}${storyEssenceBlock}${sceneAssignment}${motionAudioContext}${shotBreakdownPlanBlock}${outputContractBlock}`;
 
     return { system: systemPrompt, user, loadedSkills };
   }
@@ -4033,6 +4336,21 @@ Examples of common failure modes to avoid:
    * where type-level collections exist but haven't been expanded yet.
    */
   private async expandPendingCollections(): Promise<void> {
+    // Graph hygiene — first thing every pass does. Self-heals orphan
+    // collection parents and dangling dep refs that accumulate
+    // across reset / redo / migration cycles. Steady-state no-op; only
+    // emits a notification when something was actually repaired.
+    const hygiene = reconcileGraphHygiene(this.executor, this.config.template);
+    const summary = summariseHygieneResult(hygiene);
+    if (summary) {
+      this.log(`  Graph hygiene: ${summary}`);
+      this.emit({
+        type: 'notification',
+        level: 'info',
+        message: `Graph hygiene: ${summary}`,
+      });
+    }
+
     // Load saved scene summaries from disk (survive restarts)
     if (this.sceneSummaries.size === 0) {
       const summaryPath = join(this.config.projectDir, 'prompts', 'scene_summaries.json');
@@ -4105,6 +4423,31 @@ Examples of common failure modes to avoid:
     // Keep expanding until no more expansions happen (handles cascading: scene → SVP → shot)
     while (expanded) {
       expanded = false;
+
+      // Reconcile per-shot graph children against newly-completed
+      // scene_shot_plan outputs. When the user redoes a stage upstream
+      // of scene_shot_plan (e.g. "Scene scripts"), the cascade marks
+      // existing shot_breakdown children pending but never removes
+      // them. If the new plan has fewer shots than the previous one,
+      // those leftover children re-run with a node id that no plan
+      // entry matches (`shot_breakdown:scene_1_shot_8` when the new
+      // plan tops out at 7) — the LLM hallucinates a shot 8 anyway,
+      // and the assembler later rejects the assembled output with
+      // "shot output has shotNumber 8 but the plan does not list it".
+      //
+      // Prune those orphans before the expand-loop runs its other
+      // strategies so we avoid wasting LLM calls + assembler failures.
+      // Anchored on scene_shot_plan being COMPLETED (the new plan is
+      // on disk and authoritative).
+      for (const planNode of this.executor.getAllNodes()) {
+        if (planNode.typeId !== 'scene_shot_plan') continue;
+        if (planNode.status !== 'completed' || !planNode.outputPath) continue;
+        const sceneId = planNode.itemId;
+        if (!sceneId) continue;
+        if (this.reconcilePerShotChildrenForScene(planNode, sceneId)) {
+          expanded = true; // re-run the outer while to pick up the pruned graph
+        }
+      }
 
       for (const node of this.executor.getAllNodes()) {
         // Strategy B2: Scene-level → shot-level re-expansion (runs for completed OR pending nodes with itemId)
@@ -4464,6 +4807,38 @@ Examples of common failure modes to avoid:
         }
 
         if (didExpand) continue;
+
+        // Strategy B3: Disk-authoritative resume. Before falling through
+        // to Strategy C's LLM extraction, look for per-item content
+        // files that already exist in the type's `filePattern` directory
+        // and rebuild the item list from them. Critical for hard-restart
+        // recovery: if the previous process was killed before flushing
+        // per-item nodes to executorState, Strategy A misses; Strategy
+        // B only works for flat-list parents; Strategy C re-runs the
+        // LLM and produces a non-deterministic extraction that may
+        // disagree with the on-disk artifacts (5 scenes one run, 3 the
+        // next — leaving downstream `scene_3_shot_*` files orphaned).
+        // Same files in, same items out — alignment preserved.
+        if (!didExpand) {
+          const onDiskItems = listCollectionItemsFromDisk(
+            this.config.projectDir,
+            typeDef,
+          );
+          if (onDiskItems.length > 0) {
+            this.log(
+              `  Strategy B3: resumed ${onDiskItems.length} items for ${node.id} from on-disk content files`,
+            );
+            this.executor.expandCollection(node.id, onDiskItems);
+            this.emit({
+              type: 'notification',
+              level: 'info',
+              message: `Resumed ${node.displayName}: ${onDiskItems.map((i) => i.name).join(', ')}`,
+            });
+            didExpand = true;
+            expanded = true;
+            continue;
+          }
+        }
 
         // Strategy C: For collections that depend on 'story' (scene, character, setting),
         // run extractCollectionItems on the story output to determine items.
@@ -5428,6 +5803,9 @@ Examples of common failure modes to avoid:
     const options: GenerateOptions = {
       messages,
       temperature: isFormulaic ? 0.3 : 0.7,
+      // Propagate `agent.stop()` into the LLM stream so user-cancel
+      // aborts in-flight HTTP requests, not just the executor loop.
+      signal: this.runAbortController.signal,
     };
 
     // Force JSON output for all structured/image prompt nodes.
@@ -5952,7 +6330,12 @@ Examples of common failure modes to avoid:
       // instead — the user's rule is "within a scene only camera-angle
       // changes" and "scene N+1 picks up from scene N's last frame when
       // an `entry` is declared." See shouldForceEditPrevious.
-      if (node.itemId && firstFrameMode !== 'edit_previous_shot') {
+      //
+      // Skip the override when the anchor already picked
+      // `reuse_prior_frame` — that's the strongest signal ("view
+      // matches the source, no new image needed"), so we must NOT
+      // demote it to edit_previous_shot.
+      if (node.itemId && firstFrameMode !== 'edit_previous_shot' && firstFrameMode !== 'reuse_prior_frame') {
         const peekPrevItemId = getPreviousShotIdAcrossScenes(node.itemId, this.executor);
         const peekPrevNode = peekPrevItemId ? this.executor.getNode(`shot_image:${peekPrevItemId}`) : null;
         const previousShotAvailable = peekPrevNode?.status === 'completed';
@@ -5973,6 +6356,61 @@ Examples of common failure modes to avoid:
           // Mirror the override into the on-disk JSON so downstream
           // (e.g. last_frame, motion directive) sees the corrected mode.
           firstFrameData.generationMode = 'edit_previous_shot';
+        }
+      }
+
+      if (firstFrameMode === 'reuse_prior_frame') {
+        // View matches the source shot — its last_frame IS this shot's
+        // first_frame. Copy the file verbatim instead of running the
+        // image-edit pipeline. The source's scene+shot is encoded in
+        // the anchor; resolve to the live `shot_image_last_frame` node
+        // (or the upstream `shot_image:X.outputPaths.last_frame` for
+        // legacy projects) and `copyFileSync` to this shot's first_frame
+        // path. Byte-identical cut points are the goal.
+        const sceneIdFromItem = node.itemId?.match(/(scene_\d+)/)?.[1];
+        const shotNumFromItem = parseInt(node.itemId?.match(/shot_(\d+)/)?.[1] ?? '0', 10);
+        const anchor = sceneIdFromItem && shotNumFromItem > 0
+          ? readShotAnchorFromSvp(this.config.projectDir, sceneIdFromItem, shotNumFromItem)
+          : null;
+        const sourceSceneId = anchor?.sourceSceneId ?? sceneIdFromItem;
+        const sourceShotNum = anchor?.sourceShotNumber ?? 0;
+        if (sourceSceneId && sourceShotNum > 0) {
+          const sourceItemId = `${sourceSceneId}_shot_${sourceShotNum}`;
+          const { getLastFramePath } = await import('./crossShotChaining.js');
+          const sourceBridge = this.executor.getNode(`shot_image_last_frame:${sourceItemId}`);
+          const sourceShotNode = this.executor.getNode(`shot_image:${sourceItemId}`);
+          const sourceLastFrame =
+            (sourceBridge?.status === 'completed' && sourceBridge.outputPath
+              ? sourceBridge.outputPath
+              : null)
+            ?? (sourceShotNode ? getLastFramePath(sourceShotNode) : null);
+          if (sourceLastFrame) {
+            const assetsDir = join(this.config.projectDir, 'assets', 'images');
+            if (!existsSync(assetsDir)) mkdirSync(assetsDir, { recursive: true });
+            const sourceAbs = sourceLastFrame.startsWith('/')
+              ? sourceLastFrame
+              : join(this.config.projectDir, sourceLastFrame);
+            const ext = (sourceAbs.match(/\.(png|jpe?g|webp)$/i)?.[1] ?? 'png').toLowerCase();
+            const destAbs = join(assetsDir, `${node.itemId}_first_frame_reuse.${ext}`);
+            try {
+              const { copyFileSync } = await import('fs');
+              copyFileSync(sourceAbs, destAbs);
+              firstFramePath = relative(this.config.projectDir, destAbs);
+              this.log(`  first_frame (reuse_prior_frame): copied from ${sourceLastFrame} → ${firstFramePath}`);
+            } catch (err) {
+              this.log(`  reuse_prior_frame copy failed (${(err as Error).message}) — falling back to edit_previous_shot`);
+              // Fall through to edit_previous_shot path below by
+              // re-tagging the mode. The fallback handles the same
+              // cross-shot scenario.
+              firstFrameMode = 'edit_previous_shot';
+            }
+          } else {
+            this.log(`  reuse_prior_frame: no source last_frame found (${sourceItemId}) — falling back to edit_previous_shot`);
+            firstFrameMode = 'edit_previous_shot';
+          }
+        } else {
+          this.log(`  reuse_prior_frame: anchor missing source — falling back to edit_previous_shot`);
+          firstFrameMode = 'edit_previous_shot';
         }
       }
 
@@ -6497,160 +6935,17 @@ Examples of common failure modes to avoid:
             // Log but don't block — basic validation failures are warnings, not hard stops
           } else {
             this.log(`  Image validation passed`);
-
-            // VLM review — send image to vision model for quality check
-            // Skipped entirely if VLM was unavailable on first attempt (404)
-            const vlmCallId = `vlm_${node.id}_${Date.now()}`;
-            const vlmToolName = 'vlm_image_review';
-            if (this.vlmDisabled) {
-              this.log(`  VLM review skipped (disabled after previous 404)`);
-            } else try {
-              const { reviewImageWithVLM } = await import('./imageValidator.js');
-
-              this.emit({
-                type: 'tool_call',
-                toolCallId: vlmCallId,
-                toolName: vlmToolName,
-                arguments: { image: filePath, prompt: shotJson.imagePrompt.substring(0, 100) + '...' },
-                agentName,
-              });
-              this.emit({
-                type: 'tool_streaming',
-                toolCallId: vlmCallId,
-                chunk: 'Reviewing generated image with vision model...',
-                done: false,
-                agentName,
-                toolName: vlmToolName,
-              });
-
-              const vlmResult = await reviewImageWithVLM(absPath, shotJson.imagePrompt, this.llmFor('utility.image_review'));
-
-              // Check if VLM endpoint doesn't exist — disable for rest of session
-              if (!vlmResult.pass && vlmResult.issues.some(i => i.includes('404') || i.includes('No endpoints'))) {
-                this.vlmDisabled = true;
-                this.log(`  VLM disabled for session — endpoint not available`);
-                // Skip the retry — image is fine, just no VLM to review it
-                this.emit({
-                  type: 'tool_streaming',
-                  toolCallId: vlmCallId,
-                  chunk: 'VLM not available — skipping review for all remaining images',
-                  done: true,
-                  agentName,
-                  toolName: vlmToolName,
-                });
-                this.emit({
-                  type: 'tool_result',
-                  toolCallId: vlmCallId,
-                  toolName: vlmToolName,
-                  result: { status: 'skipped', reason: 'VLM endpoint not available' },
-                  agentName,
-                });
-              } else if (!vlmResult.pass) {
-                this.log(`  VLM review FAILED (attempt 1): ${vlmResult.issues.join('; ')}`);
-                this.emit({
-                  type: 'tool_streaming',
-                  toolCallId: vlmCallId,
-                  chunk: `REJECTED: ${vlmResult.issues.join('; ')}\nRegenerating image...`,
-                  done: false,
-                  agentName,
-                  toolName: vlmToolName,
-                });
-
-                // Retry: regenerate the image once
-                const retryResult = await submitImageGeneration({
-                  scene_number: sceneNumber,
-                  prompt: shotJson.imagePrompt,
-                  negative_prompt: shotJson.negativePrompt,
-                  aspect_ratio: shotJson.aspectRatio ?? '16:9',
-                  width: shotWidth,
-                  height: shotHeight,
-                  image_type: 'scene',
-                  generation_mode: generationMode,
-                  reference_images: hasRefs ? resolvedRefs : undefined,
-                });
-
-                const retryJob = mediaJobs.get(retryResult.jobId);
-                const retryPath = retryJob?.result?.path;
-
-                if (retryResult.status === 'completed' && retryPath) {
-                  this.log(`  Retry image generated: ${retryPath}`);
-                  const retryAbsPath = retryPath.startsWith('/') ? retryPath : join(this.config.projectDir, retryPath);
-
-                  const retryVlm = await reviewImageWithVLM(retryAbsPath, shotJson.imagePrompt, this.llmFor('utility.image_review'));
-                  if (retryVlm.pass) {
-                    this.log(`  VLM review passed on retry`);
-                    filePath = retryPath;
-                    this.emit({
-                      type: 'tool_streaming',
-                      toolCallId: vlmCallId,
-                      chunk: 'Retry image PASSED review',
-                      done: true,
-                      agentName,
-                      toolName: vlmToolName,
-                    });
-                  } else {
-                    this.log(`  VLM review FAILED again: ${retryVlm.issues.join('; ')} — accepting with warning`);
-                    this.emit({
-                      type: 'tool_streaming',
-                      toolCallId: vlmCallId,
-                      chunk: `Retry also rejected: ${retryVlm.issues.join('; ')}\nProceeding anyway`,
-                      done: true,
-                      agentName,
-                      toolName: vlmToolName,
-                    });
-                  }
-                } else {
-                  this.emit({
-                    type: 'tool_streaming',
-                    toolCallId: vlmCallId,
-                    chunk: 'Retry generation failed — proceeding with original',
-                    done: true,
-                    agentName,
-                    toolName: vlmToolName,
-                  });
-                }
-
-                this.emit({
-                  type: 'tool_result',
-                  toolCallId: vlmCallId,
-                  toolName: vlmToolName,
-                  result: { status: 'rejected_then_retried', issues: vlmResult.issues },
-                  agentName,
-                });
-              } else {
-                this.log(`  VLM review passed`);
-                this.emit({
-                  type: 'tool_streaming',
-                  toolCallId: vlmCallId,
-                  chunk: 'PASSED — image matches prompt',
-                  done: true,
-                  agentName,
-                  toolName: vlmToolName,
-                });
-                this.emit({
-                  type: 'tool_result',
-                  toolCallId: vlmCallId,
-                  toolName: vlmToolName,
-                  result: { status: 'passed' },
-                  agentName,
-                });
-              }
-            } catch (vlmErr) {
-              const vlmErrMsg = (vlmErr as Error).message;
-              this.log(`  VLM review skipped: ${vlmErrMsg}`);
-              // Disable VLM for rest of session if endpoint doesn't exist
-              if (vlmErrMsg.includes('404') || vlmErrMsg.includes('No endpoints') || vlmErrMsg.includes('not found')) {
-                this.vlmDisabled = true;
-                this.log(`  VLM disabled for this session (endpoint not available)`);
-              }
-              this.emit({
-                type: 'tool_result',
-                toolCallId: vlmCallId,
-                toolName: vlmToolName,
-                result: { status: 'skipped', error: (vlmErr as Error).message },
-                agentName,
-              });
-            }
+            // Semantic image-quality judgment is the supervisor's job:
+            // ConversationManager subscribes to BackgroundTaskRunner
+            // 'asset' events, calls `describeImageWithVLM` against the
+            // dedicated VLM_* config, and re-engages pi-agent with a
+            // `[SYSTEM EVENT]` turn. Pi-agent decides whether to call
+            // `kshana_invalidate` on the shot's node — that's where
+            // a regenerate gets driven from. The legacy in-executor
+            // `reviewImageWithVLM` + inline retry that lived here was
+            // removed: it used the WRONG llm config (utility tier, not
+            // the VLM_* env block), couldn't reflect pi-agent judgment,
+            // and duplicated the supervisor path.
           }
         } catch (valErr) {
           this.log(`  Image validation skipped: ${(valErr as Error).message}`);
@@ -7659,9 +7954,34 @@ Examples of common failure modes to avoid:
     }
 
     // 3. Stitch.
+    //
+    // Look up the prior scene's last shot so the first shot of THIS
+    // scene can anchor on its last_frame (cross-scene continuity:
+    // "exits door A in scene N → enters door B in scene N+1"). For
+    // scene 1, or when the prior scene's plan isn't on disk yet,
+    // we pass null and the assembler falls back to `fresh` for the
+    // first shot.
+    const sceneNumMatch = sceneId.match(/^scene_(\d+)$/);
+    const sceneNum = sceneNumMatch ? parseInt(sceneNumMatch[1]!, 10) : 0;
+    let priorSceneLastShot: { sceneId: string; shotNumber: number } | null = null;
+    if (sceneNum >= 2) {
+      const priorSceneId = `scene_${sceneNum - 1}`;
+      const priorShotBreakdowns = this.executor.getAllNodes()
+        .filter((n) => n.typeId === 'shot_breakdown' && n.itemId?.startsWith(`${priorSceneId}_shot_`))
+        .map((n) => {
+          const m = n.itemId!.match(/_shot_(\d+)$/);
+          return m ? parseInt(m[1]!, 10) : 0;
+        })
+        .filter((n) => n > 0)
+        .sort((a, b) => b - a);
+      if (priorShotBreakdowns.length > 0) {
+        priorSceneLastShot = { sceneId: priorSceneId, shotNumber: priorShotBreakdowns[0]! };
+      }
+    }
+
     let assembled;
     try {
-      assembled = assembleSceneVideoPrompt(plan, shots);
+      assembled = assembleSceneVideoPrompt(plan, shots, priorSceneLastShot);
     } catch (err) {
       const msg = `Assembler rejected inputs for ${sceneId}: ${(err as Error).message}`;
       this.executor.markFailed(node.id, msg);

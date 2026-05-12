@@ -19,7 +19,7 @@ import {
   singleShotSchema,
   sceneVideoPromptSchema,
 } from './schemas.js';
-import { computeAnchorsForScene } from './shotAnchorComputer.js';
+import { computeAnchorsForScene, type PriorSceneLastShot } from './shotAnchorComputer.js';
 import { synthesizeCameraTransitions } from './cameraTransitionSynth.js';
 
 export type ShotPlan = z.infer<typeof shotPlanSchema>;
@@ -37,6 +37,15 @@ export type AssembledSceneVideoPrompt = z.infer<typeof sceneVideoPromptSchema>;
 export function assembleSceneVideoPrompt(
   plan: ShotPlan,
   shots: SingleShot[],
+  /**
+   * Cross-scene chain hint. When set, the first shot's anchor will
+   * point at this prior-scene shot's last_frame instead of starting
+   * `fresh` — implementing the "exits door A in scene N → enters door
+   * B in scene N+1" rule. Null for scene 1 or when the prior scene
+   * hasn't run yet. ExecutorAgent computes this from the graph and
+   * passes it in when calling the assembler.
+   */
+  priorSceneLastShot: PriorSceneLastShot | null = null,
 ): AssembledSceneVideoPrompt {
   if (!Array.isArray(shots) || shots.length === 0) {
     throw new Error('assembleSceneVideoPrompt: shots array is empty');
@@ -75,6 +84,7 @@ export function assembleSceneVideoPrompt(
     sortedShots,
     plan.mainSubject,
     plan.secondarySubject ?? null,
+    priorSceneLastShot,
   );
   const anchorByShot = new Map(anchors.map(a => [a.shotNumber, a.anchor]));
   for (const shot of sortedShots) {

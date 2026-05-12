@@ -13,7 +13,7 @@ Output a SINGLE shot object matching the `<json_schema>` provided in your system
 
 Whenever you write a character, setting, or object reference — `perspectiveOf`, `focus.primary`, `focus.background[]`, `focus.lurking` — you MUST use the exact refId string from the `<available_refs>` block.
 
-Do NOT paraphrase, normalize casing, drop punctuation, or "fix" spellings. The refId is a database key — if the profile is `johnathan_o'hare`, write `johnathan_o'hare` (with the apostrophe). Downstream code looks up per-item nodes by these exact strings; any mismatch silently breaks reference image resolution.
+Do NOT paraphrase, normalize casing, drop punctuation, or "fix" spellings. The refId is a database key — if a refId in `<available_refs>` contains an apostrophe or other punctuation, preserve it exactly. Downstream code looks up per-item nodes by these exact strings; any mismatch silently breaks reference image resolution.
 
 If this shot needs an entity that isn't in `<available_refs>`, describe it by prose in `description` instead of referring to it by refId. Never invent a refId.
 
@@ -46,14 +46,16 @@ Recommended (set when meaningful): `perspective`, `perspectiveOf`, `focus`, `con
   "shotNumber": 1,
   "purpose": "set_the_mood",
   "duration": 4,
-  "description": "Raindrops strike a brass bell, each impact sending tiny ripples across the wet metal.",
-  "cameraWork": "extreme close-up, macro, static, shallow DOF on bell surface",
-  "audio": "metallic ring of rain on brass, distant thunder rumble",
-  "transition": "fade",
-  "focus": { "primary": "brass_bell", "background": [] },
-  "continuityRole": "none"
+  "description": "<expand the oneLineSummary into a 1–2 sentence visual brief naming a specific sensory detail from the scene script>",
+  "cameraWork": "<framing>, <angle>, <movement>, <DOF cue>",
+  "audio": "<dialogue with NAME: prefix OR ambient cues OR silence>",
+  "transition": "<cut|fade|dissolve|whip_pan|dip_to_black|continuous>",
+  "focus": { "primary": "<refid_or_short_prose>", "background": [] },
+  "continuityRole": "<entry|exit|bridge|none>"
 }
 ```
+
+(The `<...>` tokens are placeholders — substitute concrete values drawn from `<this_shot>`, `<scene_plan>`, the scene script, and `<available_refs>`. Never copy the placeholder strings into your output.)
 
 ---
 
@@ -98,15 +100,17 @@ The `focus` object (recommended for non-establishing shots) specifies what's raz
 
 ```json
 "focus": {
-  "primary": "laila_face",
-  "background": ["bronze_seal", "vikram_shoulder"],
-  "lurking": "cloaked_figure"
+  "primary": "<refid_of_focal_subject>",
+  "background": ["<refid_of_object_in_frame>", "<refid_of_secondary_subject>"],
+  "lurking": "<refid_of_later_payoff>"
 }
 ```
 
-- **`primary`** (required if focus is used): what's razor-sharp — refId preferred, prose allowed (e.g., `"bronze_seal"`, `"vikram_face"`, `"the torn letter"`).
+(The `<...>` tokens above are placeholder names — substitute the actual refIds from `<available_refs>`. DO NOT write these placeholder strings into your output.)
+
+- **`primary`** (required if focus is used): what's razor-sharp — refId preferred, short prose allowed for non-ref objects (e.g., `"the torn letter"`, `"the cracked tile"`).
 - **`background`**: visible but blurred elements — characters/objects we can see but are not the focal point.
-- **`lurking`** (optional): a defocused element planted for a later focus-pull. If this shot sets `lurking: cloaked_figure`, a later shot in `<scene_plan>` should pull `focus.primary: cloaked_figure` as the focus pull payoff.
+- **`lurking`** (optional): a defocused element planted for a later focus-pull. If this shot's `lurking` names something, a later shot in `<scene_plan>` should pull `focus.primary` to that same element for the payoff.
 
 **Use focus to:**
 - Create visual priority — who/what should the viewer look at?

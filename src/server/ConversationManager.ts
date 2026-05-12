@@ -38,6 +38,7 @@ import {
   type SupervisorState,
 } from './conversation/supervisor.js';
 import { describeImageWithVLM } from '../core/llm/describeImageWithVLM.js';
+import { backfillSceneTreeIfStale } from '../core/project/backfillSceneTreeIfStale.js';
 import { getProviderRegistry } from '../services/providers/index.js';
 import type { SessionState } from './types.js';
 import type { ExpandableTodoItem } from '../core/todo/index.js';
@@ -235,8 +236,27 @@ export class ConversationManager {
     const sinkFor = (session: ActiveSession | undefined): ConversationEvents | undefined =>
       session?.backgroundEvents ?? session?.activeEvents;
 
+    /**
+     * Session-keepalive: bump `state.lastActivity` whenever a runner
+     * event fires for this session. Without this, `cleanupStaleSessions`
+     * reaps the session after `sessionTimeoutMs` (default 30 min) of
+     * "no manual chat activity" — even when the BackgroundTaskRunner
+     * is steadily streaming progress for an in-flight pipeline. Once
+     * reaped, every subsequent runner event has nowhere to forward
+     * to (the `sessions.get(sessionId)` lookup returns undefined),
+     * the chat panel stops receiving updates, and the user sees the
+     * progress count freeze even though the pipeline is still running
+     * on disk. Touching lastActivity here keeps the session alive
+     * for the duration of the run.
+     */
+    const touchSessionActivity = (sessionId: string): ActiveSession | undefined => {
+      const session = this.sessions.get(sessionId);
+      if (session) session.state.lastActivity = Date.now();
+      return session;
+    };
+
     runner.on('started', ({ task }: BackgroundTaskRunnerEvents['started']) => {
-      const session = this.sessions.get(task.spec.sessionId);
+      const session = touchSessionActivity(task.spec.sessionId);
       captureToolCallStarted({
         sessionId: task.spec.sessionId,
         toolCallId: fakeToolCallIdForTask(task.id),
@@ -275,7 +295,7 @@ export class ConversationManager {
       );
     });
     runner.on('tool', ({ task, toolName, nodeId }: BackgroundTaskRunnerEvents['tool']) => {
-      const session = this.sessions.get(task.spec.sessionId);
+      const session = touchSessionActivity(task.spec.sessionId);
       const events = sinkFor(session);
       if (!session || !events) return;
       const line = nodeId ? `  [${toolName}] ${nodeId}` : `  [${toolName}]`;
@@ -289,7 +309,7 @@ export class ConversationManager {
       );
     });
     runner.on('result', ({ task, toolName, filePath, status, error }: BackgroundTaskRunnerEvents['result']) => {
-      const session = this.sessions.get(task.spec.sessionId);
+      const session = touchSessionActivity(task.spec.sessionId);
       const events = sinkFor(session);
       if (!session || !events) return;
       // Surface the error reason inline so both the agent (when it
@@ -314,7 +334,7 @@ export class ConversationManager {
       );
     });
     runner.on('notification', ({ task, level, message }: BackgroundTaskRunnerEvents['notification']) => {
-      const session = this.sessions.get(task.spec.sessionId);
+      const session = touchSessionActivity(task.spec.sessionId);
       const events = sinkFor(session);
       if (!session || !events) return;
       events.onToolStreaming?.(
@@ -327,7 +347,7 @@ export class ConversationManager {
       );
     });
     runner.on('asset', ({ task, kind, filePath }: BackgroundTaskRunnerEvents['asset']) => {
-      const session = this.sessions.get(task.spec.sessionId);
+      const session = touchSessionActivity(task.spec.sessionId);
       const events = sinkFor(session);
       if (!session || !events) return;
       events.onMediaGenerated?.(task.spec.sessionId, {
@@ -338,7 +358,7 @@ export class ConversationManager {
       });
     });
     runner.on('completed', ({ task }: BackgroundTaskRunnerEvents['completed']) => {
-      const session = this.sessions.get(task.spec.sessionId);
+      const session = touchSessionActivity(task.spec.sessionId);
       const events = sinkFor(session);
       const completedAt = new Date(task.completedAt ?? Date.now()).toISOString();
       const durationMs = Math.max(0, (task.completedAt ?? Date.now()) - task.startedAt);
@@ -374,7 +394,7 @@ export class ConversationManager {
       if (session) session.backgroundEvents = undefined;
     });
     runner.on('failed', ({ task, error }: BackgroundTaskRunnerEvents['failed']) => {
-      const session = this.sessions.get(task.spec.sessionId);
+      const session = touchSessionActivity(task.spec.sessionId);
       const events = sinkFor(session);
       const completedAt = new Date(task.completedAt ?? Date.now()).toISOString();
       const durationMs = Math.max(0, (task.completedAt ?? Date.now()) - task.startedAt);
@@ -412,7 +432,7 @@ export class ConversationManager {
       if (session) session.backgroundEvents = undefined;
     });
     runner.on('cancelled', ({ task }: BackgroundTaskRunnerEvents['cancelled']) => {
-      const session = this.sessions.get(task.spec.sessionId);
+      const session = touchSessionActivity(task.spec.sessionId);
       const events = sinkFor(session);
       const completedAt = new Date(task.completedAt ?? Date.now()).toISOString();
       const durationMs = Math.max(0, (task.completedAt ?? Date.now()) - task.startedAt);
@@ -481,7 +501,15 @@ export class ConversationManager {
   private scheduleSupervisorInvocation(
     event: SupervisorEvent,
     task: BackgroundTaskRunnerEvents['failed']['task'],
-    extra: { reason?: string; kind?: 'image' | 'video'; filePath?: string },
+    extra: {
+      reason?: string;
+      kind?: 'image' | 'video';
+      filePath?: string;
+      /** Node ids the user invalidated (user_invalidate event). */
+      seeds?: string[];
+      /** Free-form origin tag for user_invalidate events. */
+      source?: string;
+    },
   ): void {
     setImmediate(() => {
       void this.runSupervisorInvocation(event, task, extra);
@@ -491,7 +519,13 @@ export class ConversationManager {
   private async runSupervisorInvocation(
     event: SupervisorEvent,
     task: BackgroundTaskRunnerEvents['failed']['task'],
-    extra: { reason?: string; kind?: 'image' | 'video'; filePath?: string },
+    extra: {
+      reason?: string;
+      kind?: 'image' | 'video';
+      filePath?: string;
+      seeds?: string[];
+      source?: string;
+    },
   ): Promise<void> {
     const sessionId = task.spec.sessionId;
     const session = this.sessions.get(sessionId);
@@ -556,6 +590,16 @@ export class ConversationManager {
           taskId: task.id,
           taskKind: task.spec.kind,
           projectName: task.spec.projectName,
+        };
+      }
+      if (event === 'user_invalidate') {
+        return {
+          event: 'user_invalidate',
+          taskId: task.id,
+          taskKind: task.spec.kind,
+          projectName: task.spec.projectName,
+          seeds: extra.seeds ?? [],
+          ...(extra.source ? { source: extra.source } : {}),
         };
       }
       return {
@@ -625,6 +669,44 @@ export class ConversationManager {
           }
         : {}),
     });
+
+    // Resume restore: when the stored session has a known project,
+    // populate `sessionContext` synchronously so IPC calls that need
+    // a working dir (invalidateNodes, run_to, focusSessionProject's
+    // later content reads, etc.) succeed on the first request after
+    // resume. Without this, every IPC call would fail with "Session
+    // project not configured" until the renderer happened to fire a
+    // focusProject IPC — a race that left buttons broken after a
+    // desktop process restart even though everything else looked
+    // healthy.
+    //
+    // The richer `focusSessionProject` path (which also reads
+    // project.json, fires a broadcast, etc.) still runs when the
+    // renderer eventually calls focusProject; this just makes sure
+    // sessionContext is non-null in the interim.
+    if (stored && stored.projectSlug !== AMBIENT_PROJECT_SLUG) {
+      const resumed = this.sessions.get(sessionId);
+      if (resumed) {
+        try {
+          // The project folder may have been deleted out from under
+          // the persisted session id. Skip restore in that case so
+          // the next legitimate focusProject call surfaces the
+          // missing-project error instead of us silently swallowing it.
+          const projectDirAbs = resolveProjectDir({
+            name: stored.projectSlug,
+            basePath: defaultBasePath(),
+          });
+          const projectDirName = nodePath.basename(projectDirAbs);
+          resumed.sessionContext = mode === 'remote' && remoteFs
+            ? createRemoteSession(sessionId, projectDirName, remoteFs)
+            : createLocalSession(sessionId, projectDirName);
+        } catch {
+          // Don't fail createSession — the renderer can still re-focus
+          // explicitly if the project comes back.
+        }
+      }
+    }
+
     captureSessionStarted(sessionId, new Date(state.createdAt).toISOString());
 
     return state;
@@ -1139,6 +1221,38 @@ export class ConversationManager {
       );
     }
     const projectDirName = nodePath.basename(projectDirAbs);
+
+    // Backfill the denormalized `scenes[]` mirror from on-disk state
+    // before reading project.json. Fixes the long-standing gap where
+    // executorState.nodes was populated by the executor but scenes[]
+    // stayed empty, because the older addAsset path silently bailed
+    // on shot frames. The helper is idempotent — it short-circuits
+    // when scenes[] is already populated — so safe to invoke on every
+    // focus. Without this, UI readers (PromptsView's two-column
+    // layout, kshana_show_first_frame, etc.) come up blank on
+    // projects that ran end-to-end before the addAsset fix landed.
+    try {
+      const backfillResult = backfillSceneTreeIfStale(projectDirAbs);
+      if (backfillResult.ran) {
+        // Log only when something actually happened — otherwise the
+        // logs get noisy on every project open.
+        // eslint-disable-next-line no-console
+        console.log(
+          `[focusSessionProject] backfilled scenes[] for ${projectName}: ` +
+          `frames=${backfillResult.framesAdded ?? 0} videos=${backfillResult.videosAdded ?? 0} ` +
+          `finalVideo=${backfillResult.finalVideoSet ?? false}`,
+        );
+      }
+    } catch (err) {
+      // Backfill failure is non-fatal — project might be readable
+      // even if the backfill stumbles. Surface for debugging but
+      // continue with the focus flow.
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[focusSessionProject] backfillSceneTreeIfStale failed for ${projectName}: ${(err as Error).message}`,
+      );
+    }
+
     let project: NonNullable<ReturnType<typeof loadProject>>;
     try {
       const projectJsonPath = nodePath.join(projectDirAbs, 'project.json');
@@ -1572,6 +1686,37 @@ export class ConversationManager {
       JSON.stringify(project, null, 2),
       'utf-8',
     );
+
+    // Tell pi-agent that the project state just changed under it.
+    // Without this, the next "resume" / "what's left?" question
+    // would be answered from pi-agent's stale in-context view — it
+    // would confidently say "everything is done" because its last
+    // mental snapshot predates the user's UI mutation.
+    //
+    // Routed through the same supervisor scheduling as runner asset
+    // events: deferred via setImmediate so the synthetic task runs
+    // when the current event-loop tick clears, and gated by the same
+    // `session.state.status === 'running'` check (we don't talk over
+    // an active turn — the prompt-side "always re-check on resume"
+    // rule covers the case where this event was dropped).
+    if (result.seeds.length > 0) {
+      this.scheduleSupervisorInvocation(
+        'user_invalidate',
+        {
+          // Synthesize a TaskRecord-shaped placeholder so the
+          // supervisor's task-id-based circuit breaker treats this as
+          // a fresh non-runner event.
+          id: `user_invalidate_${Date.now()}`,
+          spec: {
+            sessionId,
+            kind: 'user_invalidate',
+            projectName: session.focusedProject ?? '(ambient)',
+          },
+        } as never,
+        { seeds: result.seeds },
+      );
+    }
+
     return result;
   }
 

@@ -1,59 +1,59 @@
 /**
- * Classify a JSON-output validation error as "structural" or "semantic".
+ * Classify a JSON-output validation error so the executor can pick a
+ * recovery path. Three classes:
  *
- * Why we care:
+ *   - `truncated`  — the LLM hit max-tokens mid-output. The content
+ *                    that exists is fine; what's MISSING is the issue.
+ *                    Sending the partial bytes to `json_repair` is the
+ *                    wrong move: repair has no scene-script, no
+ *                    available_refs, no output-contract context, so it
+ *                    just AUTHORS plausible filler to satisfy the
+ *                    schema. We've seen Stage A's plan get turned into
+ *                    `{ sceneTitle: "Default scene", shotPlan: [{...
+ *                    "Default shot." }] }` by this path. Truncation
+ *                    routes to a FULL retry — same prompt, full
+ *                    context, hopefully fewer tokens (or a larger
+ *                    budget) on the second attempt.
  *
- * The executor's retry flow today is:
+ *   - `structural` — the JSON is mostly there but malformed in a
+ *                    fix-able way: trailing comma, unquoted property,
+ *                    schema-shape mismatch ("shots: Required"). The
+ *                    `json_repair` LLM CAN plausibly patch these
+ *                    without inventing content because the body is
+ *                    largely intact.
  *
- *   broken output → json_repair LLM call → still broken → full retry
- *
- * `json_repair`'s prompt is literally "fix the broken JSON". That's
- * useful when the failure is structural (`JSON parse error`,
- * `Unterminated string`, schema-level "shots: Required") — the JSON
- * is malformed and another LLM pass can patch the syntax.
- *
- * It's useless when the failure is semantic — the JSON is perfectly
- * formed but violates a project rule the schema enforces beyond the
- * type level. Examples:
- *
- *   - "No reference to any known character / setting / object found …"
- *     (LLM hallucinated unrelated content)
- *   - "OTS-with-single-character violation. last_frame: …"
- *   - "shotNumber mismatch: expected 3, got 5"
- *   - "ref-mention check failed: …"
- *
- * json_repair has no way to fix these — the JSON syntax is already
- * valid; the content needs a different LLM roll, not a syntax patch.
- * Wasting a json_repair call just to get the same semantic error back
- * is a tax on every hallucination.
- *
- * Routing structural→json_repair-then-retry and semantic→retry-only
- * cuts one LLM call out of every semantic-failure path and lets us
- * inject the actual validation error into the retry prompt as
- * corrective guidance, instead of the generic "your output MUST be
- * valid JSON" the structural retry uses.
+ *   - `semantic`   — the JSON parses and matches the schema but
+ *                    violates a project rule (hallucinated refIds,
+ *                    OTS-with-single-character, shotNumber mismatch).
+ *                    Skip json_repair entirely — the syntax is fine,
+ *                    only the content needs another roll. Goes to a
+ *                    full retry with the validator's error injected
+ *                    into the system prompt as corrective guidance.
  *
  * Pure — string in, label out.
  */
 
-export type ValidationErrorClass = 'structural' | 'semantic';
+export type ValidationErrorClass = 'structural' | 'semantic' | 'truncated';
 
 /**
- * Patterns that indicate a JSON-syntax or schema-shape failure. Match
- * any of these and the output isn't even well-formed JSON of the
- * expected shape — json_repair can plausibly fix it.
- *
- * Listed explicitly (rather than "everything not on the semantic
- * list") because the validation surface keeps growing — better to
- * over-classify-as-semantic-and-skip-repair than over-classify-as-
- * structural-and-waste-a-call.
+ * Mid-output cutoff signatures. When ANY of these match, the upstream
+ * output was definitely truncated and json_repair must NOT see it —
+ * repair authors filler from broken input and corrupts the project.
+ */
+const TRUNCATION_PATTERNS: RegExp[] = [
+  /Unexpected end of JSON/i,
+  /Unterminated string/i,
+];
+
+/**
+ * Patterns that indicate a JSON-syntax or schema-shape failure where
+ * the content is largely intact and a syntax-repair pass can plausibly
+ * help. Truncation is EXCLUDED — it has its own class above.
  */
 const STRUCTURAL_PATTERNS: RegExp[] = [
   /^JSON parse error/i,
   /SyntaxError:/i,
   /Unexpected token/i,
-  /Unterminated string/i,
-  /Unexpected end of JSON/i,
   /Expected double-quoted property name/i,
   // Zod-level "field is missing" / "expected type X, received Y" —
   // these are about JSON SHAPE, which a structural fix can address.
@@ -69,12 +69,19 @@ const STRUCTURAL_PATTERNS: RegExp[] = [
  *
  * Defaults to 'semantic' for unrecognised errors. That's the safe
  * choice: a semantic classification skips one LLM call (json_repair)
- * and goes directly to the full retry with the error injected into
- * the prompt — the retry still has the same shot at fixing things,
- * just one call cheaper.
+ * and goes directly to the full retry — the retry still has the same
+ * shot at fixing things, just one call cheaper.
+ *
+ * Truncation is checked BEFORE structural because the raw parser
+ * tends to report "JSON parse error: Unexpected end of JSON input" —
+ * the structural-error regex would match the prefix and route the
+ * call to json_repair if we let it.
  */
 export function classifyValidationError(error: string): ValidationErrorClass {
   if (!error) return 'semantic';
+  for (const pattern of TRUNCATION_PATTERNS) {
+    if (pattern.test(error)) return 'truncated';
+  }
   for (const pattern of STRUCTURAL_PATTERNS) {
     if (pattern.test(error)) return 'structural';
   }
@@ -82,13 +89,16 @@ export function classifyValidationError(error: string): ValidationErrorClass {
 }
 
 /**
- * Build the system-prompt suffix to use for a retry attempt. For
- * structural failures we use the existing "your output MUST be valid
- * JSON" line (the LLM doesn't know what shape we want from the error
- * alone, the schema in the system prompt is what guides it). For
- * semantic failures we inject the actual error message so the LLM has
- * targeted corrective guidance — "you forgot character X" beats
- * "make sure it's valid JSON" every time.
+ * Build the system-prompt suffix to use for a retry attempt.
+ *
+ *   - `structural`: short reminder that the output must be valid JSON.
+ *     The schema in the system prompt is what guides the shape; the
+ *     specific error usually isn't actionable for the model.
+ *   - `semantic` and `truncated`: inject the validator's error message
+ *     verbatim plus a short directive. Targeted guidance ("you forgot
+ *     character X" / "your prior attempt was cut off — keep the
+ *     description concise") beats "make sure it's valid JSON" every
+ *     time.
  */
 export function buildRetrySystemSuffix(
   errorClass: ValidationErrorClass,
@@ -96,6 +106,9 @@ export function buildRetrySystemSuffix(
 ): string {
   if (errorClass === 'structural') {
     return '\n\nCRITICAL: Your output MUST be valid JSON. Do not include markdown, backticks, or any text outside the JSON object.';
+  }
+  if (errorClass === 'truncated') {
+    return `\n\nCRITICAL: Your previous attempt was CUT OFF mid-output (likely too long). The parser saw:\n\n${error}\n\nKeep each \`oneLineSummary\` / \`description\` field SHORT — under 120 characters. Do NOT pad with prose. Emit only the valid JSON object and STOP.`;
   }
   // Semantic — inject the error verbatim, plus a short directive to
   // address it specifically. The error messages from validators are

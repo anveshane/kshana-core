@@ -446,7 +446,7 @@ PASS the image ONLY if it is clean, coherent, anatomically correct, and reasonab
   async *generateStream(
     options: Omit<GenerateOptions, 'stream'>
   ): AsyncGenerator<StreamChunk, void, unknown> {
-    const { messages, tools, temperature = 0.7, responseFormat, maxTokens } = options;
+    const { messages, tools, temperature = 0.7, responseFormat, maxTokens, signal: externalSignal } = options;
     const logger = getLLMLogger();
 
     // Log request
@@ -490,6 +490,22 @@ PASS the image ONLY if it is clean, coherent, anatomically correct, and reasonab
       console.error(`[LLMClient] Hard timeout at ${STREAM_TIMEOUT_MS / 1000}s — aborting stream`);
       abortController.abort();
     }, STREAM_TIMEOUT_MS);
+
+    // External cancel: when the caller (executor) signals abort via
+    // its per-run AbortController, propagate to our internal controller
+    // so the underlying HTTP stream tears down immediately. Without
+    // this, reasoning-model calls run for minutes after `agent.stop()`
+    // before they wind down — making the user-facing Cancel feel
+    // broken. If the external signal is already aborted, abort now.
+    let externalListener: (() => void) | null = null;
+    if (externalSignal) {
+      if (externalSignal.aborted) {
+        abortController.abort();
+      } else {
+        externalListener = () => abortController.abort();
+        externalSignal.addEventListener('abort', externalListener, { once: true });
+      }
+    }
 
     const stream = await this.client.chat.completions.create(request, {
       signal: abortController.signal,
@@ -638,6 +654,12 @@ PASS the image ONLY if it is clean, coherent, anatomically correct, and reasonab
 
     // Stream completed normally — cancel the hard timeout
     clearTimeout(abortTimer);
+    // Detach the external-cancel listener if any so the caller's
+    // AbortSignal doesn't keep a reference to this closure for the
+    // process's lifetime.
+    if (externalSignal && externalListener) {
+      externalSignal.removeEventListener('abort', externalListener);
+    }
   }
 
   /**

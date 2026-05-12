@@ -426,7 +426,7 @@ export function readShotAnchorFromSvp(
   projectDir: string,
   sceneId: string,
   shotNumber: number,
-): { reason: string; sourceShotNumber?: number } | null {
+): { reason: string; sourceShotNumber?: number; sourceSceneId?: string } | null {
   const path = join(projectDir, 'prompts/videos/scenes', `${sceneId}.json`);
   if (!existsSync(path)) return null;
   let raw: string;

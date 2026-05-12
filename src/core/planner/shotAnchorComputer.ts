@@ -144,6 +144,23 @@ export function viewSignature(
 }
 
 /**
+ * The "where does scene N pick up from scene N-1" hint, used when
+ * computing anchors for the FIRST shot of a non-first scene. When the
+ * assembler can identify the prior scene's final shot, it passes it
+ * here so shot 1 anchors on that frame (`{ reason: 'continuity',
+ * sourceSceneId, sourceShotNumber }`) instead of restarting fresh —
+ * which is what implements the "exits door A in scene N → enters door
+ * B in scene N+1" continuity rule for the first-frame generator.
+ *
+ * Pass null when there is no prior scene (scene 1) or when the prior
+ * scene has no completed shots yet.
+ */
+export interface PriorSceneLastShot {
+  sceneId: string;
+  shotNumber: number;
+}
+
+/**
  * Compute anchors for an entire scene's shot list. Walks shots in
  * order; for each shot, picks the appropriate first-frame source by
  * the rules at the top of this file.
@@ -156,6 +173,7 @@ export function computeAnchorsForScene<T extends ShotForAnchor>(
   shots: T[],
   sceneMainSubject: string | null | undefined,
   sceneSecondarySubject: string | null | undefined,
+  priorSceneLastShot: PriorSceneLastShot | null = null,
 ): Array<{ shotNumber: number; anchor: FirstFrameAnchor }> {
   const out: Array<{ shotNumber: number; anchor: FirstFrameAnchor }> = [];
   // Sort defensively so out-of-order shot inputs still produce a
@@ -169,6 +187,9 @@ export function computeAnchorsForScene<T extends ShotForAnchor>(
       ordered.slice(0, i),
       sceneMainSubject,
       sceneSecondarySubject,
+      // Only relevant for the first shot of the scene — the second
+      // and beyond have within-scene predecessors and use those.
+      i === 0 ? priorSceneLastShot : null,
     );
     out.push({ shotNumber: shot.shotNumber, anchor });
   }
@@ -184,9 +205,27 @@ export function computeAnchorForShot(
   priorShots: ShotForAnchor[],
   sceneMainSubject: string | null | undefined,
   sceneSecondarySubject: string | null | undefined,
+  priorSceneLastShot: PriorSceneLastShot | null = null,
 ): FirstFrameAnchor {
   // Rule 1: first shot of the scene.
-  if (priorShots.length === 0) return { reason: 'fresh' };
+  if (priorShots.length === 0) {
+    // Rule 1a: cross-scene chain. If the assembler told us where the
+    // prior scene ended, anchor on that frame so the new scene picks
+    // up visually from where the previous one left off — UNLESS the
+    // writer asked for a hard-cut transition into this shot, in which
+    // case the scene boundary IS the reset and we go fresh.
+    if (
+      priorSceneLastShot &&
+      !(shot.transition && HARD_CUT_TRANSITIONS.has(shot.transition))
+    ) {
+      return {
+        reason: 'continuity',
+        sourceShotNumber: priorSceneLastShot.shotNumber,
+        sourceSceneId: priorSceneLastShot.sceneId,
+      };
+    }
+    return { reason: 'fresh' };
+  }
 
   // Rule 2: hard-cut transition resets the chain.
   if (shot.transition && HARD_CUT_TRANSITIONS.has(shot.transition)) {
@@ -196,26 +235,35 @@ export function computeAnchorForShot(
   // Rule 3 & 4: view comparison.
   //
   // First check the IMMEDIATE prior shot. If its view signature
-  // matches the current shot's, this is just continuity — the
-  // immediate prior IS the anchor, no need to call it "view_reuse".
+  // matches the current shot's, this shot is just the camera HOLDING
+  // — same composition, different beat. Reuse the prior last frame
+  // verbatim as this shot's first frame (no edit, no new image).
   //
-  // Only when the immediate prior is a DIFFERENT view do we walk
-  // further back to detect view-reuse (the user's "shot 5 returns
-  // to shot 2's setup" case). Picks the most recent earlier match
-  // to minimise drift over the intervening shots.
+  // If the immediate prior is a DIFFERENT view, look further back for
+  // a same-view ancestor (the "shot 5 returns to shot 2's setup"
+  // case). Picks the most recent earlier match to minimise drift over
+  // the intervening shots — also emitted as `reuse_prior` because by
+  // definition the view matches.
+  //
+  // Otherwise (different view from immediate prior, no earlier match)
+  // fall through to `continuity` — chain on immediate prior but EDIT
+  // into a new image because the camera angle actually changed.
   const thisSig = viewSignature(shot, sceneMainSubject, sceneSecondarySubject);
   const immediatePrior = priorShots[priorShots.length - 1]!;
   const immediatePriorSig = viewSignature(immediatePrior, sceneMainSubject, sceneSecondarySubject);
 
-  if (thisSig !== immediatePriorSig) {
-    for (let j = priorShots.length - 2; j >= 0; j--) {
-      const candidate = priorShots[j]!;
-      if (viewSignature(candidate, sceneMainSubject, sceneSecondarySubject) === thisSig) {
-        return { reason: 'view_reuse', sourceShotNumber: candidate.shotNumber };
-      }
+  if (thisSig === immediatePriorSig) {
+    return { reason: 'reuse_prior', sourceShotNumber: immediatePrior.shotNumber };
+  }
+
+  for (let j = priorShots.length - 2; j >= 0; j--) {
+    const candidate = priorShots[j]!;
+    if (viewSignature(candidate, sceneMainSubject, sceneSecondarySubject) === thisSig) {
+      return { reason: 'reuse_prior', sourceShotNumber: candidate.shotNumber };
     }
   }
 
-  // Default — chain on the immediate previous shot's last frame.
+  // Default — chain on the immediate previous shot's last frame, but
+  // produce a new image via edit (different view).
   return { reason: 'continuity', sourceShotNumber: immediatePrior.shotNumber };
 }

@@ -186,8 +186,15 @@ describe("registry hookup", () => {
     expect(block).toContain("transition");
   });
 
-  it("maxTokensForJsonNode budgets the new node types", () => {
-    expect(maxTokensForJsonNode("scene_shot_plan")).toBe(3000);
-    expect(maxTokensForJsonNode("shot_breakdown")).toBe(3000);
+  it("maxTokensForJsonNode budgets the new node types with enough headroom for reasoning-model chains-of-thought", () => {
+    // Reasoning models (DeepSeek-R, o-series, Gemini-thinking, Claude
+    // w/ extended thinking) emit chain-of-thought tokens INTO
+    // max_tokens before the JSON. The original 3000 cap was eaten by
+    // reasoning, output truncated mid-stream, and json_repair turned
+    // the partial bytes into a "Default scene / Default shot." stub.
+    // The bumped cap is effectively no-cap — providers don't charge
+    // for unused headroom; the LLM stops when it's done emitting.
+    expect(maxTokensForJsonNode("scene_shot_plan")).toBeGreaterThanOrEqual(20000);
+    expect(maxTokensForJsonNode("shot_breakdown")).toBeGreaterThanOrEqual(20000);
   });
 });

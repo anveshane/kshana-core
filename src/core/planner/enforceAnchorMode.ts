@@ -19,7 +19,17 @@
  *                                        are no character/setting
  *                                        refs — atmosphere shots).
  *   anchor.reason === 'continuity'   →  edit_previous_shot
- *   anchor.reason === 'view_reuse'   →  edit_previous_shot
+ *   anchor.reason === 'reuse_prior'  →  reuse_prior_frame
+ *                                       (executor short-circuits and
+ *                                        copies the source's last_frame
+ *                                        file directly — no LLM, no
+ *                                        ComfyUI call. See
+ *                                        executeShotImage for the
+ *                                        runtime handler.)
+ *   anchor.reason === 'view_reuse'   →  reuse_prior_frame
+ *                                       (legacy alias for reuse_prior
+ *                                        — old projects may still have
+ *                                        this anchor on disk.)
  *
  * Note: today's `edit_previous_shot` workflow implicitly takes the
  * "immediate previous shot". For view_reuse (which points at a NOT-
@@ -74,7 +84,15 @@ function modeForAnchor(
     // workflow no-op that wastes a step.
     return hasReferences ? 'image_text_to_image' : 'text_to_image';
   }
-  // continuity OR view_reuse → both chain on a prior frame.
+  if (anchor.reason === 'reuse_prior' || anchor.reason === 'view_reuse') {
+    // Same view as the source — REUSE the source's last_frame file
+    // verbatim. No image generation. executeShotImage short-circuits
+    // on this mode and copies the file from the source's last_frame
+    // node instead of invoking ComfyUI. Saves an edit pass per
+    // matching shot and produces byte-identical cut points.
+    return 'reuse_prior_frame';
+  }
+  // continuity (different view from the source) → edit prior frame.
   return 'edit_previous_shot';
 }
 

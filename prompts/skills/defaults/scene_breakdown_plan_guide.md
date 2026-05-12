@@ -6,14 +6,16 @@
 
 Whenever you write a character or setting reference at this stage — `mainSubject`, `secondarySubject` — you MUST use the exact refId string from the `<available_refs>` block the system provides in your user message.
 
-Do NOT paraphrase, normalize casing, drop punctuation, or "fix" spellings. The refId is a database key — if the profile is `johnathan_o'hare`, write `johnathan_o'hare` (with the apostrophe). If the setting is `andy's_bar`, write `andy's_bar`. Downstream code looks up per-item nodes by these exact strings; any mismatch silently breaks reference image resolution.
+Do NOT paraphrase, normalize casing, drop punctuation, or "fix" spellings. The refId is a database key — if `<available_refs>` lists a character whose refId contains an apostrophe (e.g. `<example_charA_with_apostrophe>`), write it verbatim with the apostrophe. Downstream code looks up per-item nodes by these exact strings; any mismatch silently breaks reference image resolution.
 
 Common failure modes to avoid:
-- Converting `johnathan_o'hare` → `johnathan_o_hare` (underscore substituted for apostrophe)
-- Converting `johnathan_o'hare` → `johnathan` (dropping last-name)
-- Typos (`jonathan` ≠ `johnathan`)
+- Substituting underscores for apostrophes in the refId
+- Dropping a hyphenated or last-name segment of the refId
+- Mis-typing the refId by even one character
 - Inventing IDs from prose in the scene script — always use the provided refIds
 - Referring to a character or setting that isn't in `<available_refs>`
+
+> The placeholder tokens shown here (`<example_charA_*>` etc.) are templates — DO NOT copy these strings into your output. Use the actual refIds the system gives you in `<available_refs>`.
 
 If the scene needs an entity that isn't in `<available_refs>`, describe it by prose in the shot's `oneLineSummary` instead of referring to it by refId. Never invent a refId.
 
@@ -53,7 +55,7 @@ The only exception: when the main subject is physically traversing between two l
 
 ## Scene Main Subject — REQUIRED
 
-Every scene MUST declare `mainSubject` — **copied verbatim from the character refIds in `<available_refs>`**. Example: if the available refs list includes `vikram`, write `"mainSubject": "vikram"` — never `"Vikram"`, `"vikram_reddy"`, or `"protagonist"`.
+Every scene MUST declare `mainSubject` — **copied verbatim from the character refIds in `<available_refs>`**. If `<available_refs>` lists a character with a lowercase snake-case refId, write that exact string — never the capitalised display name, never an expanded form, never a generic word like `"protagonist"`.
 
 - Shot perspectives downstream are interpreted relative to this subject.
 - The scene's shot flow should GENERALLY follow the main subject — their decisions, reactions, and movements drive the camera.
@@ -181,13 +183,15 @@ If mainSubject is in location A at shot N and location B at shot N+2, you need e
 
 ## oneLineSummary Field
 
-The `oneLineSummary` is a single sentence describing what happens in this shot. Be specific about action, who is involved, and the emotional beat. Examples:
+The `oneLineSummary` is a single sentence describing what happens in this shot. Be specific about action, who is involved, and the emotional beat. Shape:
 
-- ✅ "Parvati pushes open the blue peeling servant's door and steps into the kitchen."
-- ✅ "Mrs. Singh turns a page slowly, then speaks dismissively about Isha."
-- ✅ "Wide establishing shot of the ochre-walled bungalow shimmering in afternoon heat."
-- ❌ "Parvati does something" (too vague)
+- ✅ `<mainSubject>` performs a specific physical action that opens a door / crosses a threshold / picks up an object — name the action and the setting feature.
+- ✅ `<secondarySubject>` performs a single dialogue-or-reaction beat — name what they do and what it conveys (dismissive, tense, hesitant).
+- ✅ A wide establishing shot of `<setting>` at a specific time-of-day, naming one sensory cue (light, weather, texture).
+- ❌ "X does something" (too vague)
 - ❌ "Long detailed paragraph about composition, lighting, mood, color palette..." (too detailed — that's the expansion step's job)
+
+> The `<mainSubject>`, `<secondarySubject>`, `<setting>` shown above are placeholder tokens — substitute the actual refIds from `<available_refs>` and use the names from the scene script. Do NOT copy these placeholder strings.
 
 Keep it tight. The downstream expansion step writes the full description, cameraWork, focus, audio, and transition based on this one-liner plus the full plan context.
 

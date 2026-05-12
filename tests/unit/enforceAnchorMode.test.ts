@@ -58,7 +58,11 @@ describe('enforceAnchorMode', () => {
     expect(parsed.frames.first_frame.generationMode).toBe('edit_previous_shot');
   });
 
-  it('anchor=view_reuse → edit_previous_shot (graph wiring already targets the right source)', () => {
+  it('anchor=view_reuse → reuse_prior_frame (legacy anchors get the file-copy short-circuit)', () => {
+    // `view_reuse` is the legacy "same view as earlier shot" reason;
+    // newly-computed anchors emit `reuse_prior` instead. Both must
+    // map to the file-copy generationMode so the executor skips the
+    // image-edit pass.
     const parsed = {
       frames: {
         first_frame: {
@@ -70,7 +74,22 @@ describe('enforceAnchorMode', () => {
     };
     const r = enforceAnchorMode(parsed, { reason: 'view_reuse', sourceShotNumber: 2 });
     expect(r.changed).toBe(true);
-    expect(r.enforcedMode).toBe('edit_previous_shot');
+    expect(r.enforcedMode).toBe('reuse_prior_frame');
+  });
+
+  it('anchor=reuse_prior → reuse_prior_frame (newly-computed same-view anchors)', () => {
+    const parsed = {
+      frames: {
+        first_frame: {
+          imagePrompt: 'Same view as prior shot',
+          generationMode: 'image_text_to_image',
+          references: [],
+        },
+      },
+    };
+    const r = enforceAnchorMode(parsed, { reason: 'reuse_prior', sourceShotNumber: 2 });
+    expect(r.changed).toBe(true);
+    expect(r.enforcedMode).toBe('reuse_prior_frame');
   });
 
   it('LLM already picked the correct mode → no change, no log noise', () => {

@@ -5,8 +5,9 @@
  *      rules:
  *        - Shot 1 → fresh
  *        - Hard-cut transition → fresh
- *        - View-match to earlier shot (not the immediate prior) → view_reuse
- *        - Otherwise → continuity (chain on prior shot's last frame)
+ *        - View matches the source (immediate prior OR earlier shot) → reuse_prior
+ *        - Otherwise → continuity (chain on prior shot's last frame
+ *          via an edit, producing a new image)
  */
 import { describe, it, expect } from 'vitest';
 import {
@@ -172,8 +173,12 @@ describe('computeAnchorForShot', () => {
     });
   });
 
-  it('view-reuse: shot 5 matches shot 2 → anchor on shot 2 (not shot 4)', () => {
-    // Scene flow: wide → close → reaction → close → BACK to the wide.
+  it('same view as a non-immediate prior → reuse_prior on that earlier shot (was: view_reuse)', () => {
+    // Scene flow: wide → medium-protag → close-protag → wide-observer
+    // → back to medium-protag. Shot 5's view matches shot 2's, but
+    // shot 4 in between is a different view. Anchor on shot 2 and
+    // emit `reuse_prior` — the source's last frame IS this shot's
+    // first frame.
     const priors = [
       { shotNumber: 1, setting: 'arena', perspective: 'main_subject', cameraWork: 'wide', focus: { primary: 'protagonist' } },
       { shotNumber: 2, setting: 'arena', perspective: 'main_subject', cameraWork: 'medium', focus: { primary: 'protagonist' } }, // distinctive view
@@ -185,11 +190,11 @@ describe('computeAnchorForShot', () => {
       cameraWork: 'medium', focus: { primary: 'protagonist' }, transition: 'cut',
     };
     expect(computeAnchorForShot(shot5, priors, 'protagonist', null)).toEqual({
-      reason: 'view_reuse', sourceShotNumber: 2,
+      reason: 'reuse_prior', sourceShotNumber: 2,
     });
   });
 
-  it('view-reuse picks the MOST RECENT matching shot when multiple match', () => {
+  it('reuse_prior picks the MOST RECENT matching prior when multiple shots share the view', () => {
     const priors = [
       { shotNumber: 1, setting: 'a', perspective: 'main_subject', cameraWork: 'wide', focus: { primary: 'x' } },
       { shotNumber: 2, setting: 'a', perspective: 'main_subject', cameraWork: 'wide', focus: { primary: 'x' } }, // matches
@@ -202,13 +207,15 @@ describe('computeAnchorForShot', () => {
       cameraWork: 'wide', focus: { primary: 'x' }, transition: 'cut',
     };
     expect(computeAnchorForShot(shot6, priors, 'x', null)).toEqual({
-      reason: 'view_reuse', sourceShotNumber: 4,
+      reason: 'reuse_prior', sourceShotNumber: 4,
     });
   });
 
-  it('immediate prior shot match is NOT a view-reuse — it is a continuity', () => {
-    // If the immediate previous shot has the same view, no need to
-    // call out "view_reuse" — that's just continuity.
+  it('immediate prior shot match → reuse_prior (NOT continuity — same view means reuse the file)', () => {
+    // The user-stated rule: when the next shot's view matches the
+    // prior shot, reuse the prior last_frame verbatim instead of
+    // generating a new (slightly different) first_frame. The
+    // executor short-circuits ComfyUI for these.
     const priors = [
       { shotNumber: 1, setting: 'a', perspective: 'main_subject', cameraWork: 'wide', focus: { primary: 'x' } },
       { shotNumber: 2, setting: 'a', perspective: 'main_subject', cameraWork: 'wide', focus: { primary: 'x' } },
@@ -218,7 +225,7 @@ describe('computeAnchorForShot', () => {
       cameraWork: 'wide', focus: { primary: 'x' }, transition: 'cut',
     };
     expect(computeAnchorForShot(shot3, priors, 'x', null)).toEqual({
-      reason: 'continuity', sourceShotNumber: 2,
+      reason: 'reuse_prior', sourceShotNumber: 2,
     });
   });
 });
@@ -237,7 +244,9 @@ describe('computeAnchorsForScene', () => {
       { shotNumber: 1, anchor: { reason: 'fresh' } },
       { shotNumber: 2, anchor: { reason: 'continuity', sourceShotNumber: 1 } },
       { shotNumber: 3, anchor: { reason: 'continuity', sourceShotNumber: 2 } },
-      { shotNumber: 4, anchor: { reason: 'view_reuse', sourceShotNumber: 2 } },
+      // Same view as shot 2 (medium/protagonist) — emit reuse_prior so
+      // the executor copies shot 2's last_frame as shot 4's first_frame.
+      { shotNumber: 4, anchor: { reason: 'reuse_prior', sourceShotNumber: 2 } },
       { shotNumber: 5, anchor: { reason: 'fresh' } }, // dip_to_black resets
     ]);
   });
@@ -253,5 +262,53 @@ describe('computeAnchorsForScene', () => {
     expect(anchors[0]!.anchor).toEqual({ reason: 'fresh' });
     expect(anchors[1]!.anchor).toEqual({ reason: 'continuity', sourceShotNumber: 1 });
     expect(anchors[2]!.anchor).toEqual({ reason: 'continuity', sourceShotNumber: 2 });
+  });
+
+  // ── Cross-scene chaining ────────────────────────────────────────────
+  // When the assembler hands us a `priorSceneLastShot`, the FIRST shot
+  // of the scene must anchor on that frame instead of starting fresh.
+  // This is what implements the "exits door A in scene N → enters door
+  // B in scene N+1" continuity rule end-to-end.
+
+  it('shot 1 of scene N>1 anchors on the prior scene\'s last shot when one is supplied', () => {
+    const shots = [
+      { shotNumber: 1, setting: 'forest', perspective: 'main_subject', cameraWork: 'wide', focus: { primary: 'protagonist' }, transition: 'cut' },
+      { shotNumber: 2, setting: 'forest', perspective: 'main_subject', cameraWork: 'medium', focus: { primary: 'protagonist' }, transition: 'cut' },
+    ];
+    const anchors = computeAnchorsForScene(shots, 'protagonist', null, {
+      sceneId: 'scene_1',
+      shotNumber: 8,
+    });
+    expect(anchors[0]!.anchor).toEqual({
+      reason: 'continuity',
+      sourceShotNumber: 8,
+      sourceSceneId: 'scene_1',
+    });
+    // Shot 2 is unaffected — still within-scene continuity from shot 1.
+    expect(anchors[1]!.anchor).toEqual({
+      reason: 'continuity',
+      sourceShotNumber: 1,
+    });
+  });
+
+  it('shot 1 with a hard-cut entry transition still resets to fresh even when a prior scene exists', () => {
+    // The writer's hard-cut transition IS the deliberate scene-boundary
+    // reset; cross-scene anchoring must defer to it.
+    const shots = [
+      { shotNumber: 1, setting: 'dream', perspective: 'main_subject', cameraWork: 'wide', focus: { primary: 'protagonist' }, transition: 'dip_to_black' },
+    ];
+    const anchors = computeAnchorsForScene(shots, 'protagonist', null, {
+      sceneId: 'scene_1',
+      shotNumber: 8,
+    });
+    expect(anchors[0]!.anchor).toEqual({ reason: 'fresh' });
+  });
+
+  it('no priorSceneLastShot (scene 1 OR prior scene not yet planned) → first shot is fresh, as before', () => {
+    const shots = [
+      { shotNumber: 1, setting: 'a', perspective: 'main_subject', cameraWork: 'wide', focus: { primary: 'x' }, transition: 'cut' },
+    ];
+    const anchors = computeAnchorsForScene(shots, 'x', null, null);
+    expect(anchors[0]!.anchor).toEqual({ reason: 'fresh' });
   });
 });

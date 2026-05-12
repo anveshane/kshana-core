@@ -24,6 +24,7 @@
  * Pure: mutates the passed-in object, no I/O. Caller persists.
  */
 import type { ExecutorState } from "../project/projectTypes.js";
+import { reconcileGraphHygiene } from "./reconcileGraphHygiene.js";
 
 interface ProjectLike {
   executorState: ExecutorState & { lastInvalidatedIds?: string[] };
@@ -143,5 +144,41 @@ export function applyInvalidation(
   // re-run actually re-renders the final video / aggregator nodes.
   project.executorState.lastInvalidatedIds = invalidated;
 
+  // Graph hygiene — self-heal orphan collection parents and dangling
+  // dep refs. This is the moment the graph is most likely to contain
+  // accumulated cruft from prior reset / redo cycles, so reconcile
+  // here so the NEXT run sees a clean graph regardless of how it
+  // arrived at this state. See reconcileGraphHygiene.ts for the rules.
+  applyHygieneToNodes(nodes);
+
   return { invalidated, seeds, notFound };
+}
+
+/**
+ * Run the graph-hygiene self-heal pass against a raw nodes record
+ * (rather than a DependencyGraphExecutor instance). applyInvalidation
+ * operates on persisted project state — pre-executor-construction —
+ * so it can't use the executor's removeNode directly. This adapter
+ * presents the same shape and mutates the underlying record in place.
+ */
+function applyHygieneToNodes(nodes: Record<string, MutableNode>): void {
+  const executorLike = {
+    getAllNodes: (): MutableNode[] => Object.values(nodes),
+    getNode: (id: string): MutableNode | undefined => nodes[id],
+    removeNode: (id: string): boolean => {
+      const node = nodes[id];
+      if (!node) return false;
+      for (const depId of node.dependencies ?? []) {
+        const dep = nodes[depId];
+        if (dep) dep.dependents = (dep.dependents ?? []).filter((d) => d !== id);
+      }
+      for (const dependentId of node.dependents ?? []) {
+        const dependent = nodes[dependentId];
+        if (dependent) dependent.dependencies = (dependent.dependencies ?? []).filter((d) => d !== id);
+      }
+      delete nodes[id];
+      return true;
+    },
+  };
+  reconcileGraphHygiene(executorLike as never);
 }

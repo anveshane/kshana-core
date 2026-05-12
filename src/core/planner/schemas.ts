@@ -74,8 +74,46 @@ const focusSchema = z.object({
 //                       drift from the established look.
 export const firstFrameAnchorSchema = z.discriminatedUnion('reason', [
   z.object({ reason: z.literal('fresh') }),
-  z.object({ reason: z.literal('continuity'), sourceShotNumber: z.number() }),
-  z.object({ reason: z.literal('view_reuse'), sourceShotNumber: z.number() }),
+  z.object({
+    // Same chain as `reuse_prior` but the VIEW SIGNATURE differs —
+    // typically because the writer cut to a new camera angle. We still
+    // anchor on the prior last frame, but we EDIT it into a new image
+    // (camera shift, recompose) rather than reusing it verbatim. That
+    // edit is what produces the visual "almost-the-same" jump cut you
+    // see at conventional shot boundaries.
+    reason: z.literal('continuity'),
+    sourceShotNumber: z.number(),
+    // Cross-scene chain: when set, the source frame lives in
+    // `shot_image_last_frame:<sourceSceneId>_shot_<sourceShotNumber>`
+    // instead of the current scene's namespace. Used for "exits door
+    // A in scene N → enters door B in scene N+1" — the assembler
+    // picks the prior scene's last shot and stamps that id here, so
+    // addShotImageNodes wires the dependency across the boundary
+    // (rather than within the current scene, which would 404).
+    sourceSceneId: z.string().optional(),
+  }),
+  z.object({
+    // Legacy: "shot 5 returns to shot 2's setup". Same view signature
+    // as a non-immediate prior. Today treated identically to
+    // `reuse_prior` at runtime — kept in the schema only so projects
+    // saved by older builds still parse.
+    reason: z.literal('view_reuse'),
+    sourceShotNumber: z.number(),
+    sourceSceneId: z.string().optional(),
+  }),
+  z.object({
+    // NEW canonical "same view" reason. The source shot's view
+    // signature matches this shot's view signature, so the prior
+    // last_frame IS this shot's first_frame — no new image needed.
+    // The executor copies the file directly instead of running the
+    // image-edit pipeline. Emitted whenever the anchor computer
+    // finds a matching view (immediate prior OR earlier), replacing
+    // both the same-view `continuity` and the `view_reuse` cases for
+    // newly-computed anchors.
+    reason: z.literal('reuse_prior'),
+    sourceShotNumber: z.number(),
+    sourceSceneId: z.string().optional(),
+  }),
 ]);
 
 const shotSchema = z.object({
@@ -384,16 +422,30 @@ export function getPromptSchema(nodeTypeId: string): string | null {
  * a deterministic assembler with no LLM call.)
  *
  * New (hierarchical):
- *  - scene_shot_plan (Stage A): emits a small plan, ~500-1500 tokens. 3000 budget is generous.
- *  - shot_breakdown (Stage B): one shot at a time, ~600-1000 tokens. 3000 budget is generous.
+ *  - scene_shot_plan (Stage A): emits the FULL plan for one scene
+ *    (N shots × one-line summaries + scene-level entry/exit/main+secondary
+ *    subject metadata). Output is small by content, but reasoning models
+ *    (DeepSeek-R / o-series / Gemini-thinking / Claude with extended
+ *    thinking) emit chain-of-thought tokens INTO this budget before
+ *    the JSON arrives. Reasoning can easily be 3-5k tokens. The
+ *    original 3000 cap was eaten by reasoning, output got truncated
+ *    mid-stream, and json_repair turned the partial bytes into a
+ *    "Default scene / Default shot." stub (see validationErrorClass.ts
+ *    for the retry-class re-routing that prevents repair from getting
+ *    truncated input now). 50000 is effectively no-cap: max_tokens is
+ *    a CEILING, not a target — providers don't charge for unused
+ *    headroom and the LLM stops when done. Sized to absorb any
+ *    realistic reasoning trace + JSON for the longest-permitted scene.
+ *  - shot_breakdown (Stage B): one shot at a time. Same reasoning-budget
+ *    concern applies — bumped to 50000 for symmetry.
  *
  * Other JSON nodes (shot_image_prompt, character_image, setting_image) are
  * single-frame or tightly bounded and stay at 5000.
  */
 export function maxTokensForJsonNode(nodeTypeId: string): number {
   if (nodeTypeId === 'scene_video_prompt') return 12000;
-  if (nodeTypeId === 'scene_shot_plan') return 3000;
-  if (nodeTypeId === 'shot_breakdown') return 3000;
+  if (nodeTypeId === 'scene_shot_plan') return 50000;
+  if (nodeTypeId === 'shot_breakdown') return 50000;
   return 5000;
 }
 

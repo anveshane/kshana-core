@@ -64,8 +64,8 @@ export interface AddShotImageNodesArgs {
    */
   firstFrameAnchor?:
     | { reason: 'fresh' }
-    | { reason: 'continuity'; sourceShotNumber: number }
-    | { reason: 'view_reuse'; sourceShotNumber: number }
+    | { reason: 'continuity'; sourceShotNumber: number; sourceSceneId?: string }
+    | { reason: 'view_reuse'; sourceShotNumber: number; sourceSceneId?: string }
     | null;
   /** Scene id (e.g. `scene_1`) — used to compose the anchor source
    *  node id (`shot_image_last_frame:scene_1_shot_2`). Optional for
@@ -112,7 +112,14 @@ export function addShotImageNodes(args: AddShotImageNodesArgs): AddShotImageNode
       // FRAME node, not its first frame. This is what produces the
       // smooth visual flow — the image-edit pipeline edits the
       // already-rendered last frame into the new first frame.
-      priorFrameDep = `shot_image_last_frame:${sceneId}_shot_${firstFrameAnchor.sourceShotNumber}`;
+      //
+      // `sourceSceneId` is set when the anchor crosses a scene
+      // boundary ("first shot of scene N anchors on scene N-1's last
+      // shot"). When absent, the source lives in the same scene as
+      // the current shot — the assembler's default for within-scene
+      // anchors.
+      const sourceSceneId = firstFrameAnchor.sourceSceneId ?? sceneId;
+      priorFrameDep = `shot_image_last_frame:${sourceSceneId}_shot_${firstFrameAnchor.sourceShotNumber}`;
     }
   } else {
     priorFrameDep = prevShotImageId;
