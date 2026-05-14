@@ -231,6 +231,147 @@ describe("applyInvalidation", () => {
     expect(occurrences).toBe(1);
   });
 
+  // ─── Surgical-frame options (mirror DependencyGraphExecutor.invalidateNode) ───
+  //
+  // The desktop's per-asset regenerate buttons need the on-disk
+  // applyInvalidation to support the same shape the in-memory executor
+  // supports:
+  //   - `preserveFramesOther` + `singleFrame`: drop only the named frame
+  //     from `outputPaths`, leaving the others (so the next run reuses
+  //     them via ExecutorAgent's incremental-retry path).
+  //   - `cascadeOnlyCompleted`: walk dependents but ONLY mark pending
+  //     those that are already 'completed'. Pending dependents are left
+  //     untouched — they'll pick up the new upstream when they run.
+  //
+  // These three contracts mirror `ExecutorAgent.redoNode(..., { scope,
+  // frame })` so a subprocess-driven surgical regen behaves the same as
+  // the in-process redo.
+
+  it("with preserveFramesOther + singleFrame, drops only the named frame and keeps the rest", () => {
+    const node = project.executorState.nodes[
+      "shot_image:scene_1_shot_1"
+    ] as typeof project.executorState.nodes[string] & {
+      outputPaths?: Record<string, string>;
+    };
+    node.outputPaths = {
+      first_frame: "assets/images/s1shot1_first_frame.png",
+      last_frame: "assets/images/s1shot1_last_frame.png",
+      mid_frame: "assets/images/s1shot1_mid_frame.png",
+    };
+
+    applyInvalidation(project, ["shot_image:scene_1_shot_1"], {
+      cascade: false,
+      preserveFramesOther: true,
+      singleFrame: "last_frame",
+    });
+
+    const cleared = project.executorState.nodes[
+      "shot_image:scene_1_shot_1"
+    ] as typeof project.executorState.nodes[string] & {
+      outputPaths?: Record<string, string>;
+    };
+    expect(cleared.status).toBe("pending");
+    expect(cleared.outputPaths).toEqual({
+      first_frame: "assets/images/s1shot1_first_frame.png",
+      mid_frame: "assets/images/s1shot1_mid_frame.png",
+    });
+    // outputPath conventionally mirrors first_frame, so keep it when the
+    // dropped frame is NOT first_frame.
+    expect(cleared.outputPath).toBe("assets/images/foo.png");
+  });
+
+  it("with preserveFramesOther + singleFrame='first_frame', clears outputPath too (it mirrors first_frame)", () => {
+    const node = project.executorState.nodes[
+      "shot_image:scene_1_shot_1"
+    ] as typeof project.executorState.nodes[string] & {
+      outputPaths?: Record<string, string>;
+    };
+    node.outputPaths = {
+      first_frame: "assets/images/s1shot1_first_frame.png",
+      last_frame: "assets/images/s1shot1_last_frame.png",
+    };
+
+    applyInvalidation(project, ["shot_image:scene_1_shot_1"], {
+      cascade: false,
+      preserveFramesOther: true,
+      singleFrame: "first_frame",
+    });
+
+    const cleared = project.executorState.nodes[
+      "shot_image:scene_1_shot_1"
+    ] as typeof project.executorState.nodes[string] & {
+      outputPaths?: Record<string, string>;
+    };
+    expect(cleared.outputPaths).toEqual({
+      last_frame: "assets/images/s1shot1_last_frame.png",
+    });
+    expect(cleared.outputPath).toBeUndefined();
+  });
+
+  it("with cascadeOnlyCompleted, leaves already-pending downstream nodes alone", () => {
+    type N = ExecutorState["nodes"][string];
+    project.executorState.nodes["shot_video:scene_1_shot_1"] = {
+      id: "shot_video:scene_1_shot_1",
+      typeId: "shot_video",
+      itemId: "scene_1_shot_1",
+      displayName: "S1 Shot 1 Video",
+      status: "pending",
+      dependencies: ["shot_image:scene_1_shot_1"],
+      dependents: [],
+    } as N;
+    project.executorState.nodes["shot_image:scene_1_shot_1"]!.dependents = [
+      "shot_video:scene_1_shot_1",
+    ];
+
+    applyInvalidation(project, ["shot_image:scene_1_shot_1"], {
+      cascade: true,
+      cascadeOnlyCompleted: true,
+    });
+
+    // Already-pending shot_video stays pending; not re-walked through.
+    expect(project.executorState.nodes["shot_video:scene_1_shot_1"]!.status).toBe(
+      "pending",
+    );
+  });
+
+  it("with cascadeOnlyCompleted, dirties completed dependents and walks transitively", () => {
+    type N = ExecutorState["nodes"][string];
+    project.executorState.nodes["shot_video:scene_1_shot_1"] = {
+      id: "shot_video:scene_1_shot_1",
+      typeId: "shot_video",
+      itemId: "scene_1_shot_1",
+      displayName: "S1 Shot 1 Video",
+      status: "completed",
+      dependencies: ["shot_image:scene_1_shot_1"],
+      dependents: ["final_video"],
+      outputPath: "assets/videos/shots/s1shot1.mp4",
+      completedAt: 5000,
+    } as N;
+    project.executorState.nodes["final_video"] = {
+      id: "final_video",
+      typeId: "final_video",
+      displayName: "Final",
+      status: "completed",
+      dependencies: ["shot_video:scene_1_shot_1"],
+      dependents: [],
+      outputPath: "assets/videos/final/final.mp4",
+      completedAt: 9000,
+    } as N;
+    project.executorState.nodes["shot_image:scene_1_shot_1"]!.dependents = [
+      "shot_video:scene_1_shot_1",
+    ];
+
+    applyInvalidation(project, ["shot_image:scene_1_shot_1"], {
+      cascade: true,
+      cascadeOnlyCompleted: true,
+    });
+
+    expect(project.executorState.nodes["shot_video:scene_1_shot_1"]!.status).toBe(
+      "pending",
+    );
+    expect(project.executorState.nodes["final_video"]!.status).toBe("pending");
+  });
+
   it("clears the per-frame outputPaths dict so the executor's incremental-retry path can't reuse stale frames", () => {
     const node = project.executorState.nodes[
       "shot_image:scene_1_shot_1"

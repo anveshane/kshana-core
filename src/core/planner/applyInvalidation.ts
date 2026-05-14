@@ -55,6 +55,33 @@ export interface ApplyInvalidationOptions {
    * with stale `completed` status.
    */
   cascade?: boolean;
+  /**
+   * When true (and `cascade` is also true), only mark cascaded
+   * dependents pending if they were `completed`. Pending/failed
+   * dependents are left untouched — they'll naturally pick up the
+   * new upstream when they run. Mirrors
+   * `DependencyGraphExecutor.invalidateNode`'s same-named option.
+   * Used by the desktop's "regenerate first/last frame" surgical
+   * path to rebuild downstream video without disturbing in-flight
+   * or already-pending work.
+   */
+  cascadeOnlyCompleted?: boolean;
+  /**
+   * When true, preserve all `outputPaths` entries EXCEPT `singleFrame`.
+   * When false (default), clear `outputPaths` entirely.
+   *
+   * Only applies to the SEED node (the id the caller named). Cascaded
+   * dependents always get a full clear since their downstream contract
+   * is "regenerate the artifact" — there's no partial state to preserve.
+   */
+  preserveFramesOther?: boolean;
+  /**
+   * Frame key to drop from `outputPaths` when `preserveFramesOther` is
+   * true (e.g. `"last_frame"`). When `singleFrame === "first_frame"`,
+   * `outputPath` is also cleared (it conventionally mirrors first_frame).
+   * For other frame keys, `outputPath` is preserved.
+   */
+  singleFrame?: string;
 }
 
 type MutableNode = ExecutorState["nodes"][string] & {
@@ -63,9 +90,11 @@ type MutableNode = ExecutorState["nodes"][string] & {
   outputPaths?: Record<string, string>;
 };
 
-function markPending(node: MutableNode): void {
+function markPending(
+  node: MutableNode,
+  opts: { preserveFramesOther?: boolean; singleFrame?: string } = {},
+): void {
   node.status = "pending";
-  node.outputPath = undefined;
   node.startedAt = undefined;
   node.completedAt = undefined;
   node.error = undefined;
@@ -75,6 +104,22 @@ function markPending(node: MutableNode): void {
   // short-circuiting on a stale path.
   delete node.promptPath;
   delete node.artifactId;
+
+  const { preserveFramesOther, singleFrame } = opts;
+  if (preserveFramesOther && singleFrame && node.outputPaths) {
+    // Surgical-frame redo: drop just the named frame, keep the others
+    // so ExecutorAgent's incremental-retry check reuses them. Convention:
+    // node.outputPath mirrors first_frame, so clear it only when the
+    // dropped frame is first_frame.
+    delete node.outputPaths[singleFrame];
+    if (singleFrame === "first_frame") {
+      node.outputPath = undefined;
+    }
+    return;
+  }
+
+  // Full clear path (default).
+  node.outputPath = undefined;
   // Per-frame outputs dict (first_frame / last_frame / mid_frame paths).
   // Critical: if we leave this populated, ExecutorAgent's incremental-
   // retry check (ExecutorAgent.ts:5537 + 5579) will reuse the stale
@@ -91,15 +136,18 @@ export function applyInvalidation(
   opts: ApplyInvalidationOptions = {},
 ): ApplyInvalidationResult {
   const cascade = opts.cascade !== false;
+  const cascadeOnlyCompleted = opts.cascadeOnlyCompleted === true;
+  const { preserveFramesOther, singleFrame } = opts;
   const nodes = project.executorState.nodes;
   const invalidated: string[] = [];
   const seeds: string[] = [];
   const notFound: string[] = [];
   const seen = new Set<string>();
 
-  // Phase 1: seed walk — mark each user-named id pending. Track which
-  // existed in the graph so the cascade (phase 2) can start from
-  // them. Missing ids are reported in `notFound` and skipped.
+  // Phase 1: seed walk — mark each user-named id pending. The seed gets
+  // the surgical-frame options; cascaded dependents in phase 2 always
+  // get a full clear (their downstream contract is "regenerate this
+  // artifact", no partial state to preserve).
   const queue: string[] = [];
   for (const id of ids) {
     if (seen.has(id)) continue;
@@ -109,7 +157,10 @@ export function applyInvalidation(
       continue;
     }
     seen.add(id);
-    markPending(node);
+    markPending(node, {
+      ...(preserveFramesOther !== undefined ? { preserveFramesOther } : {}),
+      ...(singleFrame !== undefined ? { singleFrame } : {}),
+    });
     invalidated.push(id);
     seeds.push(id);
     queue.push(id);
@@ -120,6 +171,12 @@ export function applyInvalidation(
   // 4× final_video in the wild on Baker-and-the-Bee), so dedupe via
   // the shared `seen` set. Missing dependents (graph drift) are
   // silently skipped — there's no user intent to surface that.
+  //
+  // cascadeOnlyCompleted: skip dependents that aren't currently
+  // 'completed'. Pending/failed/in_progress dependents are left alone —
+  // they'll pick up the new upstream when they run, and the walker
+  // doesn't descend through them either (their downstream is either
+  // already pending or will be by the time it gets there).
   if (cascade) {
     while (queue.length > 0) {
       const cur = queue.shift()!;
@@ -129,6 +186,7 @@ export function applyInvalidation(
         if (seen.has(depId)) continue;
         const depNode = nodes[depId] as MutableNode | undefined;
         if (!depNode) continue;
+        if (cascadeOnlyCompleted && depNode.status !== "completed") continue;
         seen.add(depId);
         markPending(depNode);
         invalidated.push(depId);

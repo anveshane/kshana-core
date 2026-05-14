@@ -1081,7 +1081,12 @@ export class ExecutorAgent extends TypedEventEmitter {
       return invalidated;
     }
 
-    // Prompt scope: invalidate shot_image_prompt + shot_image together, no cascade
+    // Prompt scope: invalidate shot_image_prompt + shot_image, cascade to
+    // already-completed downstream (e.g. shot_video, final_video). Without
+    // the cascade, a prompt re-roll regenerates the image but the existing
+    // shot_video stays `completed` — silently baked from the OLD image.
+    // cascadeOnlyCompleted leaves pending downstream alone; they'll pick up
+    // the new image when their turn comes.
     if (scope === 'prompt') {
       const shotImageNodeId = nodeId.startsWith('shot_image_prompt:')
         ? nodeId.replace('shot_image_prompt:', 'shot_image:')
@@ -1090,7 +1095,7 @@ export class ExecutorAgent extends TypedEventEmitter {
 
       const invalidated: ExecutionNode[] = [];
       invalidated.push(...this.executor.invalidateNode(promptNodeId, { cascade: false }));
-      invalidated.push(...this.executor.invalidateNode(shotImageNodeId, { cascade: false }));
+      invalidated.push(...this.executor.invalidateNode(shotImageNodeId, { cascade: true, cascadeOnlyCompleted: true }));
       if (invalidated.length === 0) {
         this.log(`Redo prompt: nodes not found for '${shotImageNodeId}'`);
         return [];
@@ -2158,18 +2163,28 @@ export class ExecutorAgent extends TypedEventEmitter {
    * actual execution is driven by the graph.
    */
   async run(_task: string, _userResponse?: string): Promise<GenericAgentResult> {
-    // Handle /reset command: run the reset script, reload state, then continue execution
+    // Handle /reset command: run the in-process reset, reload state, then
+    // continue execution. Was previously a subprocess shell-out to
+    // `npx tsx scripts/reset-project.ts`, which only works in dev. Now
+    // calls `resetProjectStage` directly so the path is identical in
+    // packaged builds.
     const resetMatch = _task.match(/^\/reset\s+(\S+)\s+(\S+)/);
     if (resetMatch) {
       const [, projectName, stage] = resetMatch;
       this.log(`Handling /reset: project=${projectName}, stage=${stage}`);
       try {
-        const { execSync } = await import('child_process');
+        const { resetProjectStage } = await import('../../server/runners/resetProjectStage.js');
         const projectRoot = dirname(this.config.projectDir); // parent of .kshana dir
-        const scriptPath = join(projectRoot, 'scripts', 'reset-project.ts');
-        const cmd = `npx tsx "${scriptPath}" "${projectName}" "${stage}"`;
-        this.log(`Running: ${cmd} (cwd: ${projectRoot})`);
-        const output = execSync(cmd, { cwd: projectRoot, encoding: 'utf-8', timeout: 30000 });
+        const logLines: string[] = [];
+        const result = resetProjectStage({
+          basePath: projectRoot,
+          projectName: projectName!,
+          stage: stage!,
+          onLog: (line) => logLines.push(line),
+        });
+        const output =
+          `Reset ${result.resetCount} type-level + ${result.removedCount} per-item + ${result.schemaCleared} schema slot(s)\n` +
+          logLines.join('\n');
         this.log(`Reset output:\n${output}`);
 
         // Reload project.json and executor state

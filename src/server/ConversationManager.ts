@@ -1735,19 +1735,20 @@ export class ConversationManager {
     if (!session) {
       throw new Error(`Session not found: ${sessionId}`);
     }
-    if (!session.agent) {
-      throw new Error('Session agent not configured. Select a project first.');
-    }
     if (session.state.status === 'running') {
       throw new Error('Session already has a running task — cannot redo while executing');
     }
+    // We need sessionContext to know where the project lives, but we do
+    // NOT need session.agent — redoNode now runs the executor in-process
+    // (see runExecutor below). The agent gate was a relic of the legacy
+    // ExecutorAgent path that was never created in production.
     if (!session.sessionContext) {
-      throw new Error('Session context not initialized. Configure project first.');
+      throw new Error(
+        'Session project not configured. Call configureProject / focusProject first.',
+      );
     }
 
     // If user edited the prompt, save it to disk BEFORE invalidation.
-    // saveEditedPrompt requires an absolute project dir — sessionContext
-    // stores only a basename (see resolveSessionProjectDirAbs).
     const hasEdits = !!(editedPrompt && Object.keys(editedPrompt).length > 0);
     if (hasEdits) {
       const { saveEditedPrompt } = await import('./editAndRedo.js');
@@ -1755,108 +1756,266 @@ export class ConversationManager {
       await saveEditedPrompt(projectDirAbs, nodeId, editedPrompt);
     }
 
-    // Edit-prompt special case: if user edited a shot_image_prompt, we MUST
-    // NOT invalidate that prompt node (invalidation → re-run LLM → overwrite
-    // the user's edits). Instead, keep the prompt as-is and invalidate only
-    // the dependent shot_image so the image regenerates from the edited prompt.
-    // Downstream video/final stay put — user can redo them manually if needed.
+    // Edit-prompt special case: keep the user's edited prompt, regen
+    // only the dependent shot_image. Frame preserved so just that frame
+    // regenerates.
     let redoTargetNodeId = nodeId;
     let redoOpts: { frame?: string; scope?: 'prompt' | 'image_only' } = { frame, scope };
     if (hasEdits && nodeId.startsWith('shot_image_prompt:')) {
       redoTargetNodeId = nodeId.replace('shot_image_prompt:', 'shot_image:');
-      // Preserve the frame so only that frame regenerates (not the whole shot)
       redoOpts = { scope: 'image_only', frame };
     }
 
-    // Legacy ExecutorAgent path: invalidate in-process and resume runTask.
-    if ('redoNode' in session.agent) {
-      const invalidated = (session.agent as {
-        redoNode(id: string, opts?: { frame?: string; scope?: 'prompt' | 'image_only' }): unknown[];
-      }).redoNode(redoTargetNodeId, redoOpts);
-      if (invalidated.length === 0) {
-        throw new Error(`Node '${redoTargetNodeId}' not found in execution graph`);
-      }
-      return this.runTask(sessionId, '', events);
-    }
-
-    // Pi-era fallback: PiSessionAgent has no in-process executor graph,
-    // so spawn scripts/regen-node.ts (same path kshana_regen uses).
-    // Stream stdout through onToolStreaming and surface generated assets
-    // as media_generated events.
-    const projectName = session.sessionContext.projectDir.replace(/\.kshana$/, '');
-    return await this.runRegenSubprocess(sessionId, projectName, redoTargetNodeId, events);
+    return await this.runRegenInProcess(
+      sessionId,
+      redoTargetNodeId,
+      redoOpts,
+      events,
+    );
   }
 
-  private async runRegenSubprocess(
+  /**
+   * In-process surgical regen.
+   *
+   * Replaces the previous subprocess path (which shelled out to
+   * `tsx scripts/regen-node.ts`). That path was dev-only — packaged
+   * kshana-desktop builds ship no `tsx`, no `scripts/` directory, and
+   * no `pnpm`. The canonical packaged-runtime path is
+   * `src/server/runners/runExecutor.ts`, whose own header docs name
+   * this exact trap.
+   *
+   * Flow:
+   *   1. Read project.json from disk
+   *   2. Map (frame, scope) → applyInvalidation options, mirroring
+   *      ExecutorAgent.redoNode's dispatch (src/core/planner/
+   *      ExecutorAgent.ts:1041) so behavior matches the legacy in-process
+   *      redo.
+   *   3. Persist the invalidated state.
+   *   4. Run the executor in-process scoped to `lastInvalidatedIds`
+   *      via `target.runOnly`.
+   *   5. Bridge runExecutor's events (tool / result / notification /
+   *      asset) onto the supplied ConversationEvents so the chat panel
+   *      sees streaming progress just like a normal `runTask`.
+   */
+  private async runRegenInProcess(
     sessionId: string,
-    projectName: string,
     nodeId: string,
+    opts: { frame?: string; scope?: 'prompt' | 'image_only' },
     events?: ConversationEvents,
   ): Promise<GenericAgentResult> {
     const session = this.sessions.get(sessionId);
-    if (!session) throw new Error(`Session not found: ${sessionId}`);
+    if (!session || !session.sessionContext) {
+      throw new Error(`Session not found or not configured: ${sessionId}`);
+    }
 
+    const { applyInvalidation } = await import(
+      '../core/planner/applyInvalidation.js'
+    );
+    const { runExecutor } = await import('./runners/runExecutor.js');
+
+    const projectDirAbs = this.resolveSessionProjectDirAbs(session);
+    const projectJsonPath = nodePath.join(projectDirAbs, 'project.json');
+    if (!nodeFs.existsSync(projectJsonPath)) {
+      throw new Error(`project.json not found at ${projectJsonPath}`);
+    }
+
+    const projectRaw = nodeFs.readFileSync(projectJsonPath, 'utf-8');
+    const project = JSON.parse(projectRaw) as {
+      executorState?: { nodes?: Record<string, unknown>; lastInvalidatedIds?: string[] };
+    };
+    if (!project.executorState || !project.executorState.nodes) {
+      throw new Error(
+        'Cannot regenerate — project has no executorState. Run the pipeline first.',
+      );
+    }
+
+    // ── Map (frame, scope) → applyInvalidation calls. Same matrix as
+    // ExecutorAgent.redoNode and scripts/regen-node.ts.
+    const { frame, scope } = opts;
+    const projectLike = project as Parameters<typeof applyInvalidation>[0];
+    if (scope === 'prompt') {
+      const shotImageNodeId = nodeId.startsWith('shot_image_prompt:')
+        ? nodeId.replace('shot_image_prompt:', 'shot_image:')
+        : nodeId.startsWith('shot_image:')
+          ? nodeId
+          : null;
+      if (!shotImageNodeId) {
+        throw new Error(
+          `scope='prompt' requires a shot_image_prompt:* or shot_image:* node (got "${nodeId}")`,
+        );
+      }
+      const promptNodeId = shotImageNodeId.replace(
+        'shot_image:',
+        'shot_image_prompt:',
+      );
+      // Two seeds: invalidate the prompt by itself (no cascade), then
+      // the image with cascadeOnlyCompleted so the downstream video
+      // already on disk flips to pending.
+      applyInvalidation(projectLike, [promptNodeId], { cascade: false });
+      applyInvalidation(projectLike, [shotImageNodeId], {
+        cascade: true,
+        cascadeOnlyCompleted: true,
+      });
+    } else if (scope === 'image_only' || frame) {
+      const preserveOthers = frame === 'last_frame' || frame === 'mid_frame';
+      applyInvalidation(projectLike, [nodeId], {
+        cascade: true,
+        cascadeOnlyCompleted: true,
+        ...(preserveOthers
+          ? { preserveFramesOther: true, singleFrame: frame }
+          : {}),
+      });
+    } else {
+      applyInvalidation(projectLike, [nodeId], { cascade: true });
+    }
+
+    nodeFs.writeFileSync(
+      projectJsonPath,
+      JSON.stringify(project, null, 2),
+      'utf-8',
+    );
+
+    const runOnly =
+      (project.executorState as { lastInvalidatedIds?: string[] })
+        .lastInvalidatedIds ?? [];
+    if (runOnly.length === 0) {
+      throw new Error(
+        `No nodes were invalidated for ${nodeId}. Either it does not exist or its on-disk record is malformed.`,
+      );
+    }
+
+    // ── Stream-events bridge. Mirror the previous subprocess wiring so
+    // the chat panel's tool-card / media-generated handlers light up.
+    const toolCallId = `regen_${Date.now()}`;
     session.state.status = 'running';
     session.state.lastActivity = Date.now();
     session.activeEvents = events;
 
-    const { spawn } = await import('node:child_process');
-    const { join } = await import('node:path');
-    const { createAssetParser, feedChunk } = await import('../agent/pi/tools/parseAssetLines.js');
-    const tsxBin = join(process.cwd(), 'node_modules', '.bin', 'tsx');
-    const scriptPath = join(process.cwd(), 'scripts', 'regen-node.ts');
+    events?.onToolCall?.(
+      sessionId,
+      toolCallId,
+      'kshana_regen',
+      {
+        node: nodeId,
+        run_only: runOnly,
+        ...(frame ? { frame } : {}),
+        ...(scope ? { scope } : {}),
+      },
+      'kshana',
+    );
 
-    const parser = createAssetParser();
-    let stdout = '';
-    let stderr = '';
-    const startedAt = Date.now();
-    const toolCallId = `regen_${startedAt}`;
-
-    events?.onToolCall?.(sessionId, toolCallId, 'kshana_regen', { project: projectName, node: nodeId }, 'kshana');
-
-    return await new Promise<GenericAgentResult>((resolve) => {
-      const child = spawn(tsxBin, [scriptPath, projectName, nodeId], {
-        cwd: process.cwd(),
-        env: process.env,
-        stdio: ['ignore', 'pipe', 'pipe'],
-      });
-      child.stdout.on('data', (chunk: Buffer) => {
-        const text = chunk.toString('utf8');
-        stdout += text;
-        events?.onToolStreaming?.(sessionId, toolCallId, text, false, 'kshana', 'kshana_regen', false);
-        for (const ev of feedChunk(parser, text)) {
+    try {
+      const result = await runExecutor({
+        project: project as Parameters<typeof runExecutor>[0]['project'],
+        projectDir: projectDirAbs,
+        target: { runOnly },
+        name: 'kshana-regen-in-process',
+        onTool: (info) => {
+          const hint = info.nodeId ? ` ${info.nodeId}` : '';
+          events?.onToolStreaming?.(
+            sessionId,
+            toolCallId,
+            `[${info.toolName}]${hint}\n`,
+            false,
+            'kshana',
+            'kshana_regen',
+            false,
+          );
+        },
+        onResult: (info) => {
+          if (info.filePath) {
+            events?.onToolStreaming?.(
+              sessionId,
+              toolCallId,
+              `  → ${info.filePath}\n`,
+              false,
+              'kshana',
+              'kshana_regen',
+              false,
+            );
+          } else if (info.status) {
+            events?.onToolStreaming?.(
+              sessionId,
+              toolCallId,
+              `  → ${info.status}\n`,
+              false,
+              'kshana',
+              'kshana_regen',
+              false,
+            );
+          }
+          if (info.error) {
+            events?.onToolStreaming?.(
+              sessionId,
+              toolCallId,
+              `  ! ${info.error}\n`,
+              false,
+              'kshana',
+              'kshana_regen',
+              false,
+            );
+          }
+        },
+        onNotification: (info) => {
+          events?.onToolStreaming?.(
+            sessionId,
+            toolCallId,
+            `[${info.level}] ${info.message}\n`,
+            false,
+            'kshana',
+            'kshana_regen',
+            false,
+          );
+        },
+        onAsset: (event) => {
           events?.onMediaGenerated?.(sessionId, {
-            kind: ev.kind,
-            project: projectName,
-            path: ev.path,
+            kind: event.kind,
+            project: session.focusedProject ?? '',
+            path: event.filePath,
             source: 'kshana_regen',
           });
-        }
+        },
       });
-      child.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString('utf8'); });
-      child.on('error', (err) => {
-        events?.onToolResult?.(sessionId, toolCallId, 'kshana_regen', { error: err.message }, true, 'kshana');
-        session.state.status = 'error';
-        session.activeEvents = undefined;
-        resolve({ status: 'error', output: '', todos: [], error: err.message });
-      });
-      child.on('close', (code) => {
-        const ok = code === 0;
-        events?.onToolResult?.(sessionId, toolCallId, 'kshana_regen', {
-          exit_code: code,
-          stdout: stdout.slice(-500),
-          stderr: stderr.slice(-500),
-        }, !ok, 'kshana');
-        session.state.status = ok ? 'completed' : 'error';
-        session.activeEvents = undefined;
-        resolve({
-          status: ok ? 'completed' : 'error',
-          output: ok ? `Regenerated ${nodeId}` : `regen-node exited ${code}`,
-          todos: [],
-          ...(ok ? {} : { error: `regen-node exited ${code}: ${stderr.slice(-200)}` }),
-        });
-      });
-    });
+
+      const ok = result.status === 'completed';
+      events?.onToolResult?.(
+        sessionId,
+        toolCallId,
+        'kshana_regen',
+        {
+          status: result.status,
+          stopReason: result.stopReason ?? null,
+          ...(result.error ? { error: result.error } : {}),
+        },
+        !ok,
+        'kshana',
+      );
+
+      session.state.status = ok ? 'completed' : 'error';
+      session.activeEvents = undefined;
+
+      return {
+        status: ok ? 'completed' : 'error',
+        output: ok
+          ? `Regenerated ${nodeId} (${runOnly.length} node(s))`
+          : `Regen failed: ${result.error ?? result.stopReason ?? 'unknown'}`,
+        todos: [],
+        ...(ok ? {} : { error: result.error ?? `regen status=${result.status}` }),
+      };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      events?.onToolResult?.(
+        sessionId,
+        toolCallId,
+        'kshana_regen',
+        { error: msg },
+        true,
+        'kshana',
+      );
+      session.state.status = 'error';
+      session.activeEvents = undefined;
+      throw err;
+    }
   }
 
   /**
@@ -1882,10 +2041,11 @@ export class ConversationManager {
         clearInterval(session.timerCheckpointInterval);
         session.timerCheckpointInterval = undefined;
       }
-      // Clean up Remotion session resources (temp dirs, jobs) — fire and forget
-      import('../services/remotion/index.js')
-        .then(({ RemotionRenderer }) => RemotionRenderer.getInstance().cleanupSession(sessionId))
-        .catch(() => { /* Remotion service may not be initialized */ });
+      // Remotion infographic rendering is hosted by the desktop wrapper
+      // (kshana-desktop/src/main/remotionManager.ts) — no kshana-core
+      // cleanup needed. The previous in-kshana-core RemotionRenderer was
+      // removed because its `npx remotion bundle` subprocess only ran in
+      // dev (no npx in packaged builds).
       this.sessions.delete(sessionId);
       return true;
     }

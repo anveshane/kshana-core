@@ -2351,9 +2351,8 @@ export const waitForJobTool: ToolDefinition = createTool(
   'wait_for_job',
   `Wait for a generation job to complete and get the result.
 
-Use this after submitting generate_image, generate_video, edit_image, or generate_all_infographics to check status.
-When job completes, returns the artifact ID and file path.
-Supports both ComfyUI jobs and Remotion infographic jobs (prefixed with "remotion-").`,
+Use this after submitting generate_image, generate_video, or edit_image to check status.
+When job completes, returns the artifact ID and file path.`,
   {
     type: 'object',
     properties: {
@@ -2361,48 +2360,11 @@ Supports both ComfyUI jobs and Remotion infographic jobs (prefixed with "remotio
         type: 'string',
         description: 'The job ID returned from a generation tool',
       },
-      timeout: {
-        type: 'number',
-        description: 'Timeout in seconds for Remotion jobs only (default: 300). ComfyUI jobs poll indefinitely.',
-      },
     },
     required: ['job_id'],
   },
   async args => {
     const jobId = args['job_id'] as string;
-    const timeout = (args['timeout'] as number) || 300;
-
-    // Handle Remotion infographic jobs
-    if (jobId.startsWith('remotion-')) {
-      const { RemotionRenderer } = await import('../../services/remotion/index.js');
-      const renderer = RemotionRenderer.getInstance();
-
-      const startTime = Date.now();
-      const timeoutMs = timeout * 1000;
-
-      while (Date.now() - startTime < timeoutMs) {
-        const renderJob = renderer.getJobStatus(jobId);
-        if (!renderJob) {
-          return { status: 'error', error: `Remotion job not found: ${jobId}` };
-        }
-
-        if (renderJob.status === 'completed' || renderJob.status === 'failed') {
-          return {
-            job_id: renderJob.id,
-            type: 'infographic' as const,
-            status: renderJob.status,
-            progress: renderJob.progress,
-            results: renderJob.results,
-            error: renderJob.error,
-          };
-        }
-
-        // Poll every 2 seconds
-        await new Promise(resolve => setTimeout(resolve, 2000));
-      }
-
-      return { status: 'error', error: `Remotion job timed out after ${timeout}s`, job_id: jobId };
-    }
 
     // Handle ComfyUI jobs
     const job = jobs.get(jobId);
