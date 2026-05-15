@@ -171,7 +171,36 @@ export class DependencyGraphExecutor {
 
       const allDepsSatisfied = node.dependencies.every(depId => {
         const dep = this.nodes.get(depId);
-        return dep && (dep.status === 'completed' || dep.status === 'skipped');
+        if (!dep) return false;
+        if (dep.status !== 'completed' && dep.status !== 'skipped') return false;
+
+        // Guard against the "unreachable-cascade satisfies non-collection
+        // dependents" bug (task #9): if `dep` is a skipped UNEXPANDED
+        // collection AND `node` is a non-collection consumer (e.g.
+        // final_video), the collection has no real output to depend on.
+        // `final_video` would assemble 0 shot_videos and fail with an
+        // empty timeline. Distinguish from legitimate empty collections
+        // (e.g. story has no objects → object collection skipped with no
+        // children, downstream proceeds): check whether ANY per-item
+        // sibling of `dep` exists in the graph. If yes, the collection
+        // ran and produced no items legitimately. If no, the collection
+        // was skipped via unreachable-cascade and the dependent must
+        // wait for a future expansion pass.
+        if (
+          dep.isCollection &&
+          dep.status === 'skipped' &&
+          (dep.itemId === undefined || dep.itemId === dep.typeId) &&
+          !node.isCollection
+        ) {
+          for (const sibling of this.nodes.values()) {
+            if (sibling.typeId === dep.typeId && sibling.itemId && sibling.itemId !== dep.typeId) {
+              return true; // legitimate empty-after-expansion
+            }
+          }
+          return false; // unreachable cascade — wait
+        }
+
+        return true;
       });
 
       if (allDepsSatisfied) {

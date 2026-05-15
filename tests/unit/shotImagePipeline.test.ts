@@ -147,6 +147,105 @@ describe('shotImagePipeline: assembleShotImagePrompt', () => {
 
     expect(result.aspectRatio).toBe('16:9');
   });
+
+  // ── Phase 2: deterministic slot manifest (task #11) ────────────────────
+  // The assembler prepends a manifest line built from firstFrameRefs and
+  // strips inline `from image N` tokens from LLM prose. This pins both
+  // behaviours so future edits don't silently regress.
+
+  it('prepends a slot manifest line built from firstFrameRefs', async () => {
+    const { assembleShotImagePrompt } = await import('../../src/core/planner/shotImagePipeline.js');
+    const result = assembleShotImagePrompt({
+      shotNumber: 1,
+      generationStrategy: 'flfv',
+      firstFrameMode: 'image_text_to_image',
+      firstFramePrompt: 'A medium close-up of Ruby pointing a revolver.',
+      firstFrameRefs: [
+        { imageNumber: 1, type: 'setting', refId: 'setting_image:inside_pawn_shop' },
+        { imageNumber: 2, type: 'character', refId: 'character_image:ruby' },
+        { imageNumber: 3, type: 'character', refId: 'character_image:owner' },
+      ],
+      lastFramePrompt: 'Ruby now holding the crystal.',
+      negativePrompt: 'blurry',
+    });
+
+    expect(result.frames.first_frame.imagePrompt).toMatch(
+      /^Inside Pawn Shop \(setting\) from image 1\. Ruby from image 2\. Owner from image 3\./,
+    );
+    // Manifest is followed by the LLM prose, separated by a blank line.
+    expect(result.frames.first_frame.imagePrompt).toContain('\n\nA medium close-up of Ruby');
+    // The last frame gets the same manifest prepended.
+    expect(result.frames.last_frame?.imagePrompt).toMatch(
+      /^Inside Pawn Shop \(setting\) from image 1\. Ruby from image 2\. Owner from image 3\./,
+    );
+  });
+
+  it('strips inline "from image N" tokens from LLM-emitted prose', async () => {
+    const { assembleShotImagePrompt } = await import('../../src/core/planner/shotImagePipeline.js');
+    const result = assembleShotImagePrompt({
+      shotNumber: 1,
+      generationStrategy: 'flfv',
+      firstFrameMode: 'image_text_to_image',
+      firstFramePrompt:
+        'Ruby from image 2 stands on the counter, levelling her revolver at the owner from image 3 behind it.',
+      firstFrameRefs: [
+        { imageNumber: 2, type: 'character', refId: 'character_image:ruby' },
+        { imageNumber: 3, type: 'character', refId: 'character_image:owner' },
+      ],
+      lastFramePrompt: 'Owner from image 3 collapses behind the counter.',
+      negativePrompt: 'blurry',
+    });
+
+    // Manifest line precedes the LLM prose — the prose portion (after the
+    // blank-line separator) must have no inline "from image N" markers.
+    const firstProse = result.frames.first_frame.imagePrompt.split('\n\n').slice(1).join('\n\n');
+    const lastProse = (result.frames.last_frame?.imagePrompt ?? '').split('\n\n').slice(1).join('\n\n');
+    expect(firstProse).not.toMatch(/from image \d/i);
+    expect(lastProse).not.toMatch(/from image \d/i);
+    // The bare character names remain in place.
+    expect(firstProse).toContain('Ruby stands on the counter');
+    expect(firstProse).toContain('the owner behind it');
+    expect(lastProse).toContain('Owner collapses');
+  });
+
+  it('produces an empty manifest line when firstFrameRefs is empty', async () => {
+    const { assembleShotImagePrompt } = await import('../../src/core/planner/shotImagePipeline.js');
+    const result = assembleShotImagePrompt({
+      shotNumber: 1,
+      generationStrategy: 'flfv',
+      firstFrameMode: 'text_to_image',
+      firstFramePrompt: 'Atmospheric close-up of rain on a bell.',
+      firstFrameRefs: [],
+      lastFramePrompt: 'Atmospheric close-up, the bell now still.',
+      negativePrompt: 'blurry',
+    });
+
+    // No manifest, no leading "from image" anywhere — just the LLM prose.
+    expect(result.frames.first_frame.imagePrompt).toBe('Atmospheric close-up of rain on a bell.');
+    expect(result.frames.last_frame?.imagePrompt).toBe('Atmospheric close-up, the bell now still.');
+  });
+
+  it('labels settings with " (setting)" suffix; characters bare', async () => {
+    const { assembleShotImagePrompt } = await import('../../src/core/planner/shotImagePipeline.js');
+    const result = assembleShotImagePrompt({
+      shotNumber: 1,
+      generationStrategy: 'flfv',
+      firstFrameMode: 'image_text_to_image',
+      firstFramePrompt: 'shot prose',
+      firstFrameRefs: [
+        { imageNumber: 1, type: 'setting', refId: 'setting_image:lamborghini_driver_seat' },
+        { imageNumber: 2, type: 'character', refId: 'character_image:angel' },
+      ],
+      lastFramePrompt: 'delta',
+      negativePrompt: 'blurry',
+    });
+
+    expect(result.frames.first_frame.imagePrompt).toContain(
+      'Lamborghini Driver Seat (setting) from image 1.',
+    );
+    expect(result.frames.first_frame.imagePrompt).toContain('Angel from image 2.');
+    expect(result.frames.first_frame.imagePrompt).not.toContain('Angel (setting)');
+  });
 });
 
 // ──────────────────────────────────────────────────────────────────────────────

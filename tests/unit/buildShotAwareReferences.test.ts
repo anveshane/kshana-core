@@ -310,13 +310,39 @@ describe('buildShotAwareReferences — atmosphere / cutaway guard', () => {
     );
   });
 
-  it('main_subject perspective is NOT affected — still falls back to mainSubject (existing behavior)', async () => {
-    // The guard is gated on perspective=god/overhead specifically.
-    // Don't regress the normal "follow mainSubject" path.
+  it('mainSubject NOT in focus is omitted from slots (shot-aware fix per task #11)', async () => {
+    // Prior behavior: even when the mainSubject was not in this shot's
+    // focus (primary/background/lurking), the function would auto-include
+    // them as a slot. That bit production on s2shot3 — Angel (scene
+    // secondarySubject) held slot 3 even though the focal target was the
+    // owner (in focus.background). Flux then rendered Ruby pointing the
+    // gun at Angel instead of the owner.
+    //
+    // New behavior: a scene-level mainSubject / secondarySubject only
+    // gets a slot if they're in this shot's focus. The atmosphere /
+    // cutaway guard (perspective=god/overhead) is still its own
+    // independent path — see prior tests in this file.
     const { buildShotAwareReferences } = await import('../../src/core/planner/shotReferenceMapping.js');
     const result = buildShotAwareReferences(allRefsFixture, {
       mainSubject: 'protagonist',
       focusPrimary: 'some prose label',
+      focusBackground: [],
+      focusLurking: null,
+      perspective: 'main_subject',
+      purpose: 'show_reaction',
+    });
+    // Protagonist is not in focus → not included in slots.
+    expect(result.map(r => r.refId)).not.toContain('character_image:protagonist');
+  });
+
+  it('mainSubject IN focus IS included in slots', async () => {
+    // The positive case: when the mainSubject IS in the shot's focus,
+    // they get a slot — the shot-aware fix doesn't drop them, just
+    // doesn't auto-add them when absent.
+    const { buildShotAwareReferences } = await import('../../src/core/planner/shotReferenceMapping.js');
+    const result = buildShotAwareReferences(allRefsFixture, {
+      mainSubject: 'protagonist',
+      focusPrimary: 'protagonist',
       focusBackground: [],
       focusLurking: null,
       perspective: 'main_subject',

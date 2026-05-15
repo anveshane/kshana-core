@@ -77,25 +77,76 @@ export interface ShotImagePromptJson {
 // ── Assembly (deterministic, no LLM) ─────────────────────────────────────────
 
 /**
+ * Build the deterministic slot manifest line that gets prepended to the
+ * imagePrompt. Format: `<Label1> from image 1. <Label2> from image 2. ...`
+ *
+ * `references` is the authoritative slot list — the LLM-emitted prose's
+ * "from image N" markers will be stripped and replaced by this manifest.
+ * Setting refs get a "(setting)" suffix on their label so the LLM-rendered
+ * image generator knows slot 1 is the base canvas.
+ */
+function buildSlotManifestLine(references: Reference[]): string {
+  if (!references || references.length === 0) return '';
+  const labelFor = (r: Reference) => {
+    const after = r.refId.includes(':') ? r.refId.split(':')[1] : r.refId;
+    const rawName = after ?? r.refId;
+    const name = rawName
+      .split('_')
+      .map(p => p.charAt(0).toUpperCase() + p.slice(1))
+      .join(' ');
+    return r.type === 'setting' ? `${name} (setting)` : name;
+  };
+  const sorted = [...references].sort((a, b) => a.imageNumber - b.imageNumber);
+  return sorted.map(r => `${labelFor(r)} from image ${r.imageNumber}.`).join(' ');
+}
+
+/**
+ * Strip every inline `from image N` token from LLM-generated prose. The
+ * deterministic slot manifest at the top of the prompt is the single source
+ * of truth for slot binding; inline markers from the LLM are noise that
+ * sometimes mis-numbers refs or refers to slots that don't exist.
+ *
+ * Conservative pattern: matches ` from image <digits>` exactly. Leaves
+ * unrelated "image" mentions (e.g. "she stares at the image of her
+ * mother") untouched.
+ */
+function stripInlineFromImageTokens(prose: string): string {
+  return prose.replace(/\s+from image \d+/gi, '').replace(/\s{2,}/g, ' ').trim();
+}
+
+/**
  * Assemble the final shot_image_prompt JSON from pipeline call outputs.
  * Always produces valid JSON matching the shotImagePromptSchema.
+ *
+ * Phase 2 of the deterministic slot manifest (see task #11): the manifest
+ * line built from `input.firstFrameRefs` is prepended to BOTH
+ * `firstFramePrompt` and `lastFramePrompt`, and inline `from image N`
+ * tokens are stripped from LLM-emitted prose. This makes slot binding
+ * authoritative at the executor — the LLM is no longer responsible for
+ * mentioning every slot or numbering them correctly. Closes the
+ * silent-setting-omission class of bug observed on s2shot2.
  */
 export function assembleShotImagePrompt(input: AssembleInput): ShotImagePromptJson {
   // FML2V is disabled — coerce any lingering fmlfv requests to flfv so the
   // downstream provider picks FL2V (2-frame interpolation).
   const strategy = input.generationStrategy === 'fmlfv' ? 'flfv' : input.generationStrategy;
 
+  const manifestLine = buildSlotManifestLine(input.firstFrameRefs);
+  const firstFrameProse = stripInlineFromImageTokens(input.firstFramePrompt);
+  const lastFrameProse = stripInlineFromImageTokens(input.lastFramePrompt);
+  const composed = (line: string, prose: string) => (line ? `${line}\n\n${prose}` : prose);
+
   return {
     shotNumber: input.shotNumber,
     generationStrategy: strategy,
     frames: {
       first_frame: {
-        imagePrompt: input.firstFramePrompt,
+        imagePrompt: composed(manifestLine, firstFrameProse),
         generationMode: input.firstFrameMode,
         references: input.firstFrameRefs,
       },
       last_frame: {
-        imagePrompt: input.lastFramePrompt,
+        imagePrompt: composed(manifestLine, lastFrameProse),
         generationMode: 'edit_first_frame',
         references: [],
       },
