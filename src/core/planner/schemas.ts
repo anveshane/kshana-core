@@ -49,6 +49,91 @@ export const continuityRoleValues = [
 
 const continuityRoleEnum = z.enum(continuityRoleValues);
 
+// ── Bharata framework: rasa, narrative mode, abhinaya tags ───────────────────
+//
+// Rasa = the dominant emotional aesthetic of a scene. One of nine canonical
+// rasas from Bharata's Natyashastra (~2nd cent BCE). Used to drive deterministic
+// palette/lighting/pacing/lens choices downstream in image and motion prompts.
+export const rasaValues = [
+  'shringara',  // love, beauty, attraction
+  'hasya',      // mirth, comedy
+  'karuna',     // sorrow, compassion
+  'raudra',     // anger, fury
+  'veera',      // heroic resolve, courage
+  'bhayanaka',  // fear, dread
+  'bibhatsa',   // revulsion, disgust
+  'adbhuta',    // wonder, awe
+  'shanta',     // peace, stillness
+] as const;
+const rasaEnum = z.enum(rasaValues);
+
+// Narrative mode — structural shape of the scene/project.
+// Drives validator behavior (e.g. only full_arc requires all five pancha-sandhi joints).
+export const narrativeModeValues = [
+  'full_arc',         // 5-joint complete story, ≥90s typical
+  'compressed_arc',   // 3-joint micro-story
+  'vignette',         // single sustained beat, one rasa
+  'mood',             // pure rasa exposition, no plot arc
+] as const;
+const narrativeModeEnum = z.enum(narrativeModeValues);
+
+// Sthayi-bhava — the persistent emotional substrate beneath a rasa.
+// Optional; declared on a scene and/or per-character at project level.
+export const sthayiValues = [
+  'rati',     // love (→ shringara)
+  'hasa',     // mirth (→ hasya)
+  'soka',     // grief (→ karuna)
+  'krodha',   // anger (→ raudra)
+  'utsaha',   // heroic resolve (→ veera)
+  'bhaya',    // fear (→ bhayanaka)
+  'jugupsa',  // disgust (→ bibhatsa)
+  'vismaya',  // wonder (→ adbhuta)
+  'sama',     // calm (→ shanta)
+] as const;
+const sthayiEnum = z.enum(sthayiValues);
+
+// Sattvika — involuntary internal cue visible on the body. Curated subset
+// from Bharata's 8 sattvika-bhavas. Optional per-shot tag; surfaces a
+// micro-physical signal current AI video typically underspecifies.
+export const sattvikaValues = [
+  'vepathu',    // trembling
+  'sveda',      // sweat
+  'stambha',    // stillness / paralysis
+  'romancha',   // gooseflesh
+  'vaivarnya',  // pallor or flush
+  'ashru',      // tears
+] as const;
+const sattvikaEnum = z.enum(sattvikaValues);
+
+// Drishti — character gaze direction. Curated subset of Bharata's 36 drishtis.
+// Optional per-shot tag; used when the face is the focal element.
+export const drishtiValues = [
+  'sama',       // level, direct, unblinking
+  'alokita',    // sidelong glance
+  'sachi',      // over-shoulder back-look
+  'nimilita',   // half-closed, inward
+  'unmilita',   // wide, alert
+  'kuncita',    // shrinking, fearful
+  'roudri',     // fierce, predatory
+  'lalita',     // soft, affectionate
+] as const;
+const drishtiEnum = z.enum(drishtiValues);
+
+// Vyabhichari-bhava — transient emotion that flickers against the scene's sthayi.
+// Curated subset. Use only on shots where a micro-emotion shifts.
+export const vyabhichariValues = [
+  'smriti',     // memory flash
+  'cinta',      // worry
+  'sanka',      // suspicion
+  'nirveda',    // despair
+  'harsha',     // joy-flash
+  'autsukya',   // longing
+  'garva',      // pride
+  'glani',      // weariness
+  'lajja',      // shame
+] as const;
+const vyabhichariEnum = z.enum(vyabhichariValues);
+
 // Focus — what's sharp vs blurred in the frame
 const focusSchema = z.object({
   primary: z.string().min(1),                              // razor-sharp subject (refId or prose name)
@@ -148,6 +233,10 @@ const shotSchema = z.object({
   // Populated by the deterministic assembler, not the LLM. Nullable so
   // legacy/pre-anchor breakdowns still parse.
   firstFrameAnchor: firstFrameAnchorSchema.nullable().optional(),
+  // Bharata optional tags — surface micro-cues for downstream image/video prompt injection.
+  sattvika: sattvikaEnum.nullable().optional(),
+  drishti: drishtiEnum.nullable().optional(),
+  vyabhichariBhava: vyabhichariEnum.nullable().optional(),
 }).refine(
   (shot) => shot.firstFrame?.description || shot.description,
   { message: 'Shot must have either firstFrame.description or description' },
@@ -178,6 +267,10 @@ export const shotPlanEntrySchema = z.object({
   oneLineSummary: z.string().min(1),
   perspective: perspectiveEnum.optional(),
   continuityRole: continuityRoleEnum.optional(),
+  // Bharata optional tags at Stage A — propagate to assembled shot.
+  sattvika: sattvikaEnum.nullable().optional(),
+  drishti: drishtiEnum.nullable().optional(),
+  vyabhichariBhava: vyabhichariEnum.nullable().optional(),
 });
 
 export const shotPlanSchema = z.object({
@@ -188,6 +281,10 @@ export const shotPlanSchema = z.object({
   secondarySubject: z.string().nullable().optional(),
   entry: z.string().optional(),
   exit: z.string().optional(),
+  // Bharata scene-level classification — drives downstream prompt steering.
+  rasa: rasaEnum.nullable().optional(),
+  narrativeMode: narrativeModeEnum.nullable().optional(),
+  sthayi: sthayiEnum.nullable().optional(),
   shotPlan: z.array(shotPlanEntrySchema).min(1, 'shotPlan must not be empty'),
 });
 
@@ -205,6 +302,10 @@ export const sceneVideoPromptSchema = z.object({
   // first_frame on scene_(N-1)'s last shot's last_frame.
   entry: z.string().optional(),
   exit: z.string().optional(),
+  // Bharata scene-level classification (propagated from Stage A).
+  rasa: rasaEnum.nullable().optional(),
+  narrativeMode: narrativeModeEnum.nullable().optional(),
+  sthayi: sthayiEnum.nullable().optional(),
   shots: z.array(shotSchema).min(1, 'shots array must not be empty'),
 }).refine(
   (svp) => {
@@ -374,6 +475,9 @@ export function getPromptSchema(nodeTypeId: string): string | null {
   "secondarySubject": "string | null (optional refId of a second pivotal character — e.g., 'laila'; null/omit if none)",
   "entry": "string (one-sentence description of how this scene visually picks up from the prior scene)",
   "exit": "string (one-sentence description of how this scene sets up the next scene)",
+  "rasa": "${rasaValues.join(' | ')} (REQUIRED — the scene's dominant emotional aesthetic per Bharata)",
+  "narrativeMode": "${narrativeModeValues.join(' | ')} (REQUIRED — the structural shape of this scene)",
+  "sthayi": "${sthayiValues.join(' | ')} (optional — the protagonist's persistent emotional ground)",
   "shotPlan": [
     {
       "shotNumber": number,
@@ -381,7 +485,10 @@ export function getPromptSchema(nodeTypeId: string): string | null {
       "duration": number,
       "oneLineSummary": "string (one sentence: what happens in this shot)",
       "perspective": "${perspectiveValues.join(' | ')} (optional at plan stage; required for show_action / meet_character)",
-      "continuityRole": "${continuityRoleValues.join(' | ')} (optional — entry/exit/bridge for location transitions of mainSubject; 'none' otherwise)"
+      "continuityRole": "${continuityRoleValues.join(' | ')} (optional — entry/exit/bridge for location transitions of mainSubject; 'none' otherwise)",
+      "sattvika": "${sattvikaValues.join(' | ')} (optional — involuntary body cue; tag 1–3 shots per scene only)",
+      "drishti": "${drishtiValues.join(' | ')} (optional — gaze direction, only when face is the focal element)",
+      "vyabhichariBhava": "${vyabhichariValues.join(' | ')} (optional — transient emotion flicker; use sparingly)"
     }
   ]
 }
@@ -402,7 +509,10 @@ export function getPromptSchema(nodeTypeId: string): string | null {
   },
   "continuityRole": "${continuityRoleValues.join(' | ')} (entry/exit/bridge for location transitions of mainSubject; 'none' otherwise)",
   "audio": "string (dialogue prefixed with CHARACTER NAME: + ambient sounds)",
-  "transition": "cut | crossfade | fade | dip_to_black | flash_to_white | circle_close | circle_open | wipe_left | wipe_right"
+  "transition": "cut | crossfade | fade | dip_to_black | flash_to_white | circle_close | circle_open | wipe_left | wipe_right",
+  "sattvika": "${sattvikaValues.join(' | ')} (optional — preserve from Stage A plan if set; you may add when prose obviously contains the cue)",
+  "drishti": "${drishtiValues.join(' | ')} (optional — preserve from Stage A plan if set; only when face is focal)",
+  "vyabhichariBhava": "${vyabhichariValues.join(' | ')} (optional — preserve from Stage A plan if set; transient micro-emotion only)"
 }
 </json_schema>`,
   };

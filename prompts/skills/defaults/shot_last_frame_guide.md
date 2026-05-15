@@ -57,3 +57,7 @@ Same rules as first frame. No motion verbs.
 ## Use <last_frame_changes> if provided
 
 The `<last_frame_changes>` block lists what the scene state tracking says must differ. Use these as your starting point, but go FURTHER. The state changes are minimum requirements — your last frame should show even more visual difference.
+
+## Bharata Cue Injection
+
+The shot context may include a `<bharata_cues>` block carrying scene-rasa palette/lighting tokens and per-shot `sattvika`/`drishti`/`vyabhichariBhava` cues. The last frame must honor the same palette/lighting as the first frame (the rasa is scene-level — it does not switch mid-shot). Per-shot physical cues should be REINFORCED in the last frame — if the shot is a held standoff with `sattvika: stambha`, the last frame shows the protagonist even MORE frozen, not less.

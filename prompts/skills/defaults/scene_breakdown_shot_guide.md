@@ -208,3 +208,33 @@ Before returning JSON:
 9. **Reference count ≤ 4** across `focus.primary`, `focus.background[]`, `focus.lurking`, plus mainSubject/secondarySubject if they appear in this shot
 10. **`continuityRole`** matches the plan's hint when set; otherwise default `none`
 11. **OTS framing** never paired with a single-character shot — use `insert` / `extreme_close_up` / `close_up` instead
+12. **Bharata tags preserved from Stage A** — if the plan entry for this shot includes `sattvika`, `drishti`, or `vyabhichariBhava`, copy them through into the expanded shot JSON. You MAY add or refine these tags when the expanded prose makes them obviously appropriate, but you MUST NOT silently drop tags Stage A set.
+
+---
+
+## Bharata Framework — Per-Shot Expansion
+
+The Stage A plan supplies the scene's `rasa` and (optionally) per-shot Bharata tags. At Stage B you must:
+
+1. **Honor the scene's rasa** when writing `description`, `cameraWork`, and `audio`. The rasa's palette/lighting/pacing prescription steers prose tone — see Stage A guide for the rasa table.
+2. **Preserve and physicalize Stage A tags.** If the plan says `sattvika: "vepathu"` for this shot, the description must SHOW the trembling (white knuckles, tremor in the hands, spear shaking). If `drishti: "roudri"`, the description must SHOW fierce predatory eyes (narrowed, fixed, predator-like). The tag alone is not enough — it must surface in the prose so downstream image-prompt generation has something concrete to render.
+3. **You may add a Bharata tag** at Stage B when an emotional micro-cue is clearly present in your description but wasn't in Stage A's plan. Use the canonical enums only.
+
+### Canonical enums — DO NOT invent values
+
+- **`sattvika`**: `vepathu`, `sveda`, `stambha`, `romancha`, `vaivarnya`, `ashru`
+- **`drishti`**: `sama`, `alokita`, `sachi`, `nimilita`, `unmilita`, `kuncita`, `roudri`, `lalita`
+- **`vyabhichariBhava`**: `smriti`, `cinta`, `sanka`, `nirveda`, `harsha`, `autsukya`, `garva`, `glani`, `lajja`
+
+Common error: writing `bhaya` or `krodha` for `vyabhichariBhava`. Those are sthayi-bhavas (the persistent ground), not transient flickers — they belong on the scene's `sthayi` field, NOT on a shot.
+
+### Camera / lens bias by scene rasa
+
+When `cameraWork` is otherwise free, bias defaults by the scene's rasa:
+- `shanta`, `karuna` → static or imperceptibly slow drift; medium-telephoto compression; shallow DOF on face.
+- `raudra`, `bhayanaka` → handheld permissible; whip pans on reveal; wider lens with optical distortion welcome.
+- `veera` → low-angle push-in on resolve beats; tracking on action.
+- `adbhuta` → slow rise/reveal; symmetric framing; layered atmosphere.
+- `shringara` → soft push-in; golden-key light cue; shallow DOF.
+
+Override these defaults only when the specific beat genuinely demands it.

@@ -46,3 +46,18 @@ running, walking, crawling, reaching, turning, falling, moving, stepping, rising
 ## Story Faithfulness
 
 Include ONLY what the shot description says. Do not invent elements not mentioned. If a character is not in the shot description, do not add them even if they're in the available references.
+
+## Bharata Cue Injection
+
+The shot context may include a `<bharata_cues>` block. When present it carries:
+
+1. **Rasa palette + lighting tokens** (e.g. for `bhayanaka`: "absolute black and deep red, sickly green hints, vignette tightening; low-key chiaroscuro, hard pinprick highlights, large negative space"). Incorporate these into your `imagePrompt` as the dominant colour and lighting prescription. Do NOT override unless the shot description explicitly demands a different palette.
+
+2. **Physical micro-cues** translated from per-shot tags. Examples:
+   - `sattvika: vepathu` → "visible trembling, white-knuckled grip, slight tremor in the hands"
+   - `sattvika: stambha` → "absolute stillness, frozen posture, feet planted, breath held"
+   - `drishti: sama` → "level direct gaze straight ahead, unblinking, steady"
+   - `drishti: roudri` → "fierce predatory gaze, narrowed eyes, focused like a hunter"
+   - `vyabhichariBhava: smriti` → "a brief flicker of recollection across the face, eyes momentarily unfocused"
+
+When `<bharata_cues>` is present, surface those exact phrases (or close paraphrases) in the prompt. A tag in the JSON but absent from the prose is a tag silently lost.

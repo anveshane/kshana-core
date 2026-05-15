@@ -3932,6 +3932,65 @@ Examples of common failure modes to avoid:
       ? `\n\n${[shotAudioBlock, shotNarrationBlock].filter(Boolean).join('\n\n')}`
       : '';
 
+    // Bharata cues block. For shot_image_prompt + shot_motion_directive nodes,
+    // read scene.rasa from the scene_video_prompt JSON and per-shot
+    // sattvika/drishti/vyabhichariBhava tags, compose the deterministic
+    // palette/lighting/cue strings via rasaModifiers, and inject as a
+    // <bharata_cues> block in the user message. The image/motion guides
+    // instruct the LLM to surface these tokens in their output.
+    let bharataCuesBlock = '';
+    if (
+      (node.typeId === 'shot_image_prompt' || node.typeId === 'shot_motion_directive') &&
+      node.itemId
+    ) {
+      const sceneId = node.itemId.match(/(scene_\d+)/)?.[1];
+      const shotNum = parseInt(node.itemId.match(/shot_(\d+)/)?.[1] ?? '0', 10);
+      if (sceneId && shotNum > 0) {
+        const svpNode = this.executor.getNode(`scene_video_prompt:${sceneId}`);
+        if (svpNode?.outputPath) {
+          try {
+            const svpPath = join(this.config.projectDir, svpNode.outputPath);
+            if (existsSync(svpPath)) {
+              let raw = readFileSync(svpPath, 'utf-8').trim();
+              if (raw.startsWith('```')) {
+                raw = raw.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '');
+              }
+              const svp = JSON.parse(raw);
+              const shot = (Array.isArray(svp.shots) ? svp.shots : [])
+                .find((s: { shotNumber?: number }) => s.shotNumber === shotNum);
+              const rasa = svp.rasa ?? null;
+              const sattvika = shot?.sattvika ?? null;
+              const drishti = shot?.drishti ?? null;
+              const vyabhichari = shot?.vyabhichariBhava ?? null;
+              if (rasa || sattvika || drishti || vyabhichari) {
+                const { RASA_MODIFIERS, composeBharataCues } = await import('./rasaModifiers.js');
+                const lines: string[] = [];
+                if (rasa && rasa in RASA_MODIFIERS) {
+                  const m = RASA_MODIFIERS[rasa as keyof typeof RASA_MODIFIERS];
+                  lines.push(`scene rasa: ${rasa}`);
+                  lines.push(`palette: ${m.paletteTokens}`);
+                  lines.push(`lighting: ${m.lightingKey}`);
+                  if (node.typeId === 'shot_motion_directive') {
+                    lines.push(`camera bias: ${m.cameraBias}`);
+                    lines.push(`lens preference: ${m.lensPreference}`);
+                  }
+                  if (m.negativePrompt) lines.push(`negative-prompt fragment: ${m.negativePrompt}`);
+                }
+                const cues = composeBharataCues({ sattvika, drishti, vyabhichariBhava: vyabhichari });
+                if (cues) lines.push(`per-shot physical cues: ${cues}`);
+                if (lines.length > 0) {
+                  bharataCuesBlock = `\n\n<bharata_cues>\n${lines.join('\n')}\n</bharata_cues>\n\nSurface these palette/lighting tokens AND physical cues in your output. The cues are explicit directives, not optional flavor — a tag without prose presence is silently lost.`;
+                  this.log(`  Injected bharata_cues for ${node.itemId}: rasa=${rasa} sattvika=${sattvika} drishti=${drishti} vyabhichari=${vyabhichari}`);
+                }
+              }
+            }
+          } catch (err) {
+            this.log(`  bharata_cues: failed to read SVP for ${node.itemId}: ${(err as Error).message}`);
+          }
+        }
+      }
+    }
+
     // For scene nodes: inject scene_assignment with summaries and boundaries
     let sceneAssignment = '';
     if (node.typeId === 'scene' && node.itemId && this.sceneSummaries.size > 0) {
@@ -4003,8 +4062,8 @@ Examples of common failure modes to avoid:
     const outputContractBlock = buildOutputContractBlock(node.typeId);
 
     const user = inputs.contextBlock
-      ? `${task}${projectContext}${availableRefsBlock}${referenceImageContext}${sceneStateContext}${characterTagsBlock}${perspectiveContext}${focusContext}${shotContextHint}${storyEssenceBlock}${sceneAssignment}${motionAudioContext}${shotBreakdownPlanBlock}\n\n${inputs.contextBlock}${outputContractBlock}`
-      : `${task}${projectContext}${availableRefsBlock}${referenceImageContext}${sceneStateContext}${characterTagsBlock}${perspectiveContext}${focusContext}${shotContextHint}${storyEssenceBlock}${sceneAssignment}${motionAudioContext}${shotBreakdownPlanBlock}${outputContractBlock}`;
+      ? `${task}${projectContext}${availableRefsBlock}${referenceImageContext}${sceneStateContext}${characterTagsBlock}${perspectiveContext}${focusContext}${shotContextHint}${storyEssenceBlock}${sceneAssignment}${motionAudioContext}${shotBreakdownPlanBlock}${bharataCuesBlock}\n\n${inputs.contextBlock}${outputContractBlock}`
+      : `${task}${projectContext}${availableRefsBlock}${referenceImageContext}${sceneStateContext}${characterTagsBlock}${perspectiveContext}${focusContext}${shotContextHint}${storyEssenceBlock}${sceneAssignment}${motionAudioContext}${shotBreakdownPlanBlock}${bharataCuesBlock}${outputContractBlock}`;
 
     return { system: systemPrompt, user, loadedSkills };
   }

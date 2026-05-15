@@ -92,6 +92,21 @@ export function assembleSceneVideoPrompt(
     if (a) shot.firstFrameAnchor = a;
   }
 
+  // Propagate Stage A Bharata tags (sattvika / drishti / vyabhichariBhava)
+  // onto shots that lack them. Stage B may refine or omit; Stage A's
+  // assignment is the fallback so the tag survives into downstream
+  // image/video prompt builders that read these fields.
+  const planByShot = new Map(plan.shotPlan.map(p => [p.shotNumber, p] as const));
+  for (const shot of sortedShots) {
+    const planEntry = planByShot.get(shot.shotNumber);
+    if (!planEntry) continue;
+    if (!shot.sattvika && planEntry.sattvika) shot.sattvika = planEntry.sattvika;
+    if (!shot.drishti && planEntry.drishti) shot.drishti = planEntry.drishti;
+    if (!shot.vyabhichariBhava && planEntry.vyabhichariBhava) {
+      shot.vyabhichariBhava = planEntry.vyabhichariBhava;
+    }
+  }
+
   // Camera-transition synthesis. For each shot whose anchor is
   // `continuity` AND whose camera position has shifted vs the source,
   // prepend a smooth-movement verb to its cameraWork. Prevents the
@@ -111,6 +126,12 @@ export function assembleSceneVideoPrompt(
       : {}),
     ...(plan.entry ? { entry: plan.entry } : {}),
     ...(plan.exit ? { exit: plan.exit } : {}),
+    // Bharata propagation — Stage A's scene-level classification flows
+    // into the assembled scene_video_prompt so downstream image/video
+    // prompt builders can read it via scene.rasa et al.
+    ...(plan.rasa ? { rasa: plan.rasa } : {}),
+    ...(plan.narrativeMode ? { narrativeMode: plan.narrativeMode } : {}),
+    ...(plan.sthayi ? { sthayi: plan.sthayi } : {}),
     shots: sortedShots,
   };
 

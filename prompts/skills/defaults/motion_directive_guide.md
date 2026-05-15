@@ -201,6 +201,20 @@ Before outputting, verify:
 
 ---
 
+## Bharata Camera-Bias Injection
+
+If the shot context includes a `<bharata_cues>` block with rasa pacing/camera tokens, bias your motion accordingly:
+
+- **`shanta`, `karuna`** — camera static or imperceptibly slow drift; long held motions on subject; no whip pans, no shakes.
+- **`raudra`, `bhayanaka`** — handheld permissible; faster reframes on reveal; whip pans on cuts INTO this shot are okay; tighter, denser motion.
+- **`veera`** — low-angle push on resolve beats; tracking on action.
+- **`adbhuta`** — slow rise/reveal; gradual push; symmetric, reverent framing.
+- **`shringara`** — soft push or gentle drift; no harsh moves.
+
+If the shot carries `sattvika: vepathu` or `stambha`, motion must SHOW the trembling or stillness on the subject — the body's involuntary state is part of the directive, not just the camera's path.
+
+---
+
 Output ONLY a JSON object with a single key `"motionDirective"` containing the paragraph:
 
 ```

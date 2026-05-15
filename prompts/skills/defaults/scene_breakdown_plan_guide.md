@@ -197,6 +197,94 @@ Keep it tight. The downstream expansion step writes the full description, camera
 
 ---
 
+## Bharata Framework — REQUIRED Scene Classification
+
+Before listing shots, classify this scene by its emotional and structural type. These fields steer pacing, purpose mix, and downstream image/video prompt construction.
+
+### Scene-level required fields
+
+Add these to the top-level `shot_plan` JSON object:
+
+- **`rasa`** (REQUIRED, pick exactly ONE):
+  - `shringara` — love, beauty, attraction
+  - `hasya` — mirth, comedy
+  - `karuna` — sorrow, compassion
+  - `raudra` — anger, fury
+  - `veera` — heroic resolve, courage
+  - `bhayanaka` — fear, dread
+  - `bibhatsa` — revulsion, disgust
+  - `adbhuta` — wonder, awe
+  - `shanta` — peace, stillness
+- **`narrativeMode`** (REQUIRED, pick exactly ONE):
+  - `vignette` — a single sustained beat, one rasa, no full arc. **Default for single-scene 30–60s pieces.**
+  - `compressed_arc` — 3-joint micro-story (setup → middle → resolve)
+  - `full_arc` — complete 5-joint story (≥90s typical)
+  - `mood` — pure rasa exposition with no plot motion
+- **`sthayi`** (optional but recommended): the protagonist's persistent emotional ground in this scene. One of: `rati` (love), `hasa` (mirth), `soka` (grief), `krodha` (anger), `utsaha` (heroic resolve), `bhaya` (fear), `jugupsa` (disgust), `vismaya` (wonder), `sama` (calm).
+
+### Rasa-driven pacing & purpose bias
+
+Use the declared rasa to bias shot duration AND purpose distribution. Don't freelance pacing when a rasa prescription exists.
+
+| Rasa | Default shot duration | Purpose mix bias (favor these) | Avoid (relative) |
+|---|---|---|---|
+| `shanta` | 5–8s | hold_emotion, set_the_mood, show_reaction | show_action, punctuate |
+| `karuna` | 5–7s | show_reaction, hold_emotion, show_clue | show_action |
+| `bhayanaka` | 3–4s (tension builds via density) | show_tension, show_clue, show_reaction, punctuate | hold_emotion (too long = relief) |
+| `raudra` | 3–4s | show_action, punctuate, show_tension | hold_emotion |
+| `veera` | mixed: 3–4s action / 6–8s resolve | show_action, hold_emotion (on resolve), meet_character | set_the_world |
+| `adbhuta` | 5–7s | set_the_world, show_change, show_clue | show_action |
+| `shringara` | 5–7s soft holds | meet_character, hold_emotion, show_reaction | show_action, punctuate |
+| `hasya` | 3–5s snappy | show_action, show_reaction | hold_emotion |
+| `bibhatsa` | 4–6s linger | show_clue, set_the_mood | meet_character |
+
+Apply the rasa's pacing band as the DEFAULT for every shot unless a beat genuinely demands an override. Climactic holds and deliberate beats may exceed.
+
+### Shot-level optional Bharata tags
+
+Tag 1–3 shots per scene that earn it. **Do NOT tag every shot.** These surface micro-cues current AI image/video underspecifies, and an over-tagged plan loses the signal.
+
+Add any of these to individual `shotPlan[]` entries when the beat needs the cue:
+
+- **`sattvika`** — involuntary internal cue visible on the body. ONE of: `vepathu` (trembling), `sveda` (sweat), `stambha` (stillness/paralysis), `romancha` (gooseflesh), `vaivarnya` (pallor or flush), `ashru` (tears).
+- **`drishti`** — character gaze direction (only when face is the focal element). ONE of: `sama` (level/direct), `alokita` (sidelong), `sachi` (over-shoulder back-look), `nimilita` (half-closed/inward), `unmilita` (wide/alert), `kuncita` (shrinking/fearful), `roudri` (fierce/predatory), `lalita` (soft/affectionate).
+- **`vyabhichariBhava`** — transient emotion flickering against the scene's sthayi. ONE of: `smriti` (memory flash), `cinta` (worry), `sanka` (suspicion), `nirveda` (despair), `harsha` (joy-flash), `autsukya` (longing), `garva` (pride), `glani` (weariness), `lajja` (shame).
+
+**Use values from these exact lists only.** Do not invent new sattvika/drishti/vyabhichari values — downstream lookup tables reject unknown values. (Common error: writing `bhaya` or `krodha` for `vyabhichariBhava` — those are sthayi-bhavas, not transient.)
+
+### Duration budget — RESPECT THE TARGET
+
+The user's `targetDuration` is the budget. Stage-A shot expansion can pull more cinematic value from a beat, but **total `duration` across all shots must stay within ±10% of the target**. The Bharata vocabulary is not a license to balloon shot counts. If the rasa-prescribed pacing would force overrun, drop a shot or shorten an establisher — do NOT exceed the budget.
+
+### Bharata-output JSON shape
+
+```
+{
+  "sceneNumber": ...,
+  "sceneTitle": "...",
+  "rasa": "...",              // REQUIRED
+  "narrativeMode": "...",     // REQUIRED
+  "sthayi": "...",            // optional
+  "totalDuration": ...,
+  "mainSubject": "...",
+  "shotPlan": [
+    {
+      "shotNumber": 1,
+      "purpose": "...",
+      "duration": ...,
+      "oneLineSummary": "...",
+      "perspective": "...",
+      "continuityRole": "...",
+      "sattvika": "...",          // optional — only when earned
+      "drishti": "...",           // optional — only when face is focal
+      "vyabhichariBhava": "..."   // optional — only on emotional shifts
+    }
+  ]
+}
+```
+
+---
+
 ## Pre-Output Checklist — RUN EVERY ITEM
 
 Before returning JSON:
@@ -211,3 +299,8 @@ Before returning JSON:
 8. **`secondarySubject`** is set verbatim from `<available_refs>` if a pivotal second character exists; otherwise omitted
 9. **`entry` and `exit`** strings are set
 10. **Main subject continuity verified** — no teleporting between locations; bridging shots (exit/bridge/entry) marked when mainSubject's location changes
+11. **Bharata required fields present** — scene declares a single valid `rasa` AND `narrativeMode` from the exact enum lists above
+12. **Rasa pacing audit** — most shot durations sit within the rasa's prescribed band (deviations only when a beat genuinely demands them)
+13. **Duration budget respected** — `totalDuration` (sum of `duration` across `shotPlan`) is within ±10% of the requested `targetDuration`
+14. **Optional Bharata tags use canonical values only** — any `sattvika`, `drishti`, `vyabhichariBhava` value appears in the enum list above; no invented values (e.g. `bhaya` / `krodha` are sthayi, NOT vyabhichari)
+15. **If `narrativeMode` is `vignette`**: the rasa is sustained — the plan does NOT cycle through multiple emotional registers
