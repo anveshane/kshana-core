@@ -78,7 +78,16 @@ export const TEMPLATE_DEPS: Record<string, string[]> = {
   shot_image_prompt: ['scene_video_prompt'],
   shot_motion_directive: ['scene_video_prompt', 'shot_image_prompt', 'world_style'],
   shot_image: ['shot_image_prompt', 'character_image', 'setting_image', 'object_image'],
-  shot_video: ['shot_image', 'shot_motion_directive'],
+  // shot_image_last_frame was previously absent from this map. Its omission
+  // meant `pnpm reset <stage>` (and the desktop reset path that calls the
+  // same resetProjectStage) never invalidated last_frame nodes via the BFS
+  // that walks TEMPLATE_DEPS — so after a reset the executor's
+  // "outputPath exists on disk" short-circuit in executeShotImageLastFrame.ts
+  // returned the stale prior render as the node's output, and last frames
+  // silently survived across resets. Adding it puts last frames on the same
+  // invalidation chain as first frames so resets are symmetric.
+  shot_image_last_frame: ['shot_image_prompt', 'shot_image', 'character_image', 'setting_image', 'object_image'],
+  shot_video: ['shot_image', 'shot_image_last_frame', 'shot_motion_directive'],
   final_video: ['shot_video'],
 };
 
