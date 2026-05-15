@@ -11,6 +11,7 @@
  */
 
 import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync, unlinkSync, statSync, renameSync } from 'fs';
+import { atomicWriteFileSync } from '../../utils/atomicWrite.js';
 import { join, dirname, relative } from 'path';
 import { TypedEventEmitter } from '../../events/EventEmitter.js';
 import { LLMClient } from '../llm/index.js';
@@ -4926,7 +4927,7 @@ Examples of common failure modes to avoid:
                   if (this.sceneSummaries.size > 0) {
                     const promptsDir = join(this.config.projectDir, 'prompts');
                     if (!existsSync(promptsDir)) mkdirSync(promptsDir, { recursive: true });
-                    writeFileSync(
+                    atomicWriteFileSync(
                       join(promptsDir, 'scene_summaries.json'),
                       JSON.stringify(Object.fromEntries(this.sceneSummaries), null, 2),
                     );
@@ -4934,7 +4935,7 @@ Examples of common failure modes to avoid:
                   if (this.sceneEstimatedDurations.size > 0) {
                     const promptsDir = join(this.config.projectDir, 'prompts');
                     if (!existsSync(promptsDir)) mkdirSync(promptsDir, { recursive: true });
-                    writeFileSync(
+                    atomicWriteFileSync(
                       join(promptsDir, 'scene_durations.json'),
                       JSON.stringify(Object.fromEntries(this.sceneEstimatedDurations), null, 2),
                     );
@@ -6092,12 +6093,12 @@ Examples of common failure modes to avoid:
         if (this.sceneSummaries.size > 0) {
           const summaryPath = join(this.config.projectDir, 'prompts', 'scene_summaries.json');
           if (!existsSync(join(this.config.projectDir, 'prompts'))) mkdirSync(join(this.config.projectDir, 'prompts'), { recursive: true });
-          writeFileSync(summaryPath, JSON.stringify(Object.fromEntries(this.sceneSummaries), null, 2));
+          atomicWriteFileSync(summaryPath, JSON.stringify(Object.fromEntries(this.sceneSummaries), null, 2));
         }
         if (this.sceneEstimatedDurations.size > 0) {
           const durPath = join(this.config.projectDir, 'prompts', 'scene_durations.json');
           if (!existsSync(join(this.config.projectDir, 'prompts'))) mkdirSync(join(this.config.projectDir, 'prompts'), { recursive: true });
-          writeFileSync(durPath, JSON.stringify(Object.fromEntries(this.sceneEstimatedDurations), null, 2));
+          atomicWriteFileSync(durPath, JSON.stringify(Object.fromEntries(this.sceneEstimatedDurations), null, 2));
         }
       }
 
@@ -7845,7 +7846,7 @@ Examples of common failure modes to avoid:
     const outputAbs = join(this.config.projectDir, outputRel);
     const outputDir = join(this.config.projectDir, 'prompts');
     if (!existsSync(outputDir)) mkdirSync(outputDir, { recursive: true });
-    writeFileSync(outputAbs, JSON.stringify(essence, null, 2));
+    atomicWriteFileSync(outputAbs, JSON.stringify(essence, null, 2));
 
     this.storyEssence = essence;
     this.log(`  story_essence: wrote ${outputRel} (genre=${essence.genre})`);
@@ -8457,7 +8458,7 @@ Examples of common failure modes to avoid:
         mkdirSync(dir, { recursive: true });
       }
       const filePath = join(dir, 'project.json');
-      writeFileSync(filePath, JSON.stringify(this.config.project, null, 2), 'utf-8');
+      atomicWriteFileSync(filePath, JSON.stringify(this.config.project, null, 2), 'utf-8');
     } catch (error) {
       // Non-fatal — execution can continue without persistence
       this.emit({

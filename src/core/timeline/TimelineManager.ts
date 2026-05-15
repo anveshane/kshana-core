@@ -5,7 +5,8 @@
  * No tool concerns — this module is the core logic layer.
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync } from 'fs';
+import { atomicWriteFileSync } from '../../utils/atomicWrite.js';
 import { dirname, join } from 'path';
 import {
   readProjectText,
@@ -1080,7 +1081,7 @@ export function saveTimeline(projectDir: string, timeline: Timeline): void {
   if (!existsSync(dir)) {
     mkdirSync(dir, { recursive: true });
   }
-  writeFileSync(filePath, content, 'utf-8');
+  atomicWriteFileSync(filePath, content, 'utf-8');
 }
 
 /**

@@ -17,10 +17,11 @@
  *   - scripts/reset-project.ts (delegates to this so dev + prod share
  *     a single source of truth)
  */
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { STAGE_ALIASES, TEMPLATE_DEPS } from '../../core/planner/stages.js';
 import { resetSchemaStage } from '../../core/project/resetSchemaStage.js';
+import { atomicWriteFileSync } from '../../utils/atomicWrite.js';
 
 export class ResetProjectError extends Error {
   constructor(message: string) {
@@ -383,7 +384,7 @@ export function resetProjectStage(
   );
 
   // Persist.
-  writeFileSync(projectPath, JSON.stringify(project, null, 2));
+  atomicWriteFileSync(projectPath, JSON.stringify(project, null, 2));
 
   // Summary numbers from the live `nodes` map (post-clean if --clean).
   const remaining = Object.values(nodes);

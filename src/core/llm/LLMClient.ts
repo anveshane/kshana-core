@@ -483,10 +483,16 @@ PASS the image ONLY if it is clean, coherent, anatomically correct, and reasonab
       request.provider = providerPref;
     }
 
-    // Total wall-clock timeout for the entire streaming call (including thinking)
+    // Total wall-clock timeout for the entire streaming call (including thinking).
+    // When this fires we set `hardTimeoutFired` so the surrounding error
+    // handler can re-throw a labeled error ("[LLMClient] hard timeout
+    // …") instead of letting the SDK's generic AbortError bubble out as
+    // a cryptic 'Failed: <node> — AbortError' in the user's chat.
     const STREAM_TIMEOUT_MS = 200_000; // 200 seconds
     const abortController = new AbortController();
+    let hardTimeoutFired = false;
     const abortTimer = setTimeout(() => {
+      hardTimeoutFired = true;
       console.error(`[LLMClient] Hard timeout at ${STREAM_TIMEOUT_MS / 1000}s — aborting stream`);
       abortController.abort();
     }, STREAM_TIMEOUT_MS);
@@ -525,6 +531,7 @@ PASS the image ONLY if it is clean, coherent, anatomically correct, and reasonab
     let pendingToolCalls: ToolCall[] | null = null;
     let loggedComplete = false;
 
+    try {
     for await (const chunk of stream) {
       // Check total elapsed time — abort if stuck in reasoning loop
       const elapsed = Date.now() - streamStartTime;
@@ -650,6 +657,20 @@ PASS the image ONLY if it is clean, coherent, anatomically correct, and reasonab
         finishReason: pendingFinishReason,
       });
       yield { done: true };
+    }
+    } catch (err) {
+      // Re-label cryptic AbortError when our hard-timeout fired so the
+      // chat panel shows a clear message instead of "Failed: <node> —
+      // AbortError". External-cancel aborts (user clicked Cancel) pass
+      // through unchanged — those errors are expected and the agent
+      // loop already handles them as cancellation.
+      const errName = err instanceof Error ? err.name : '';
+      if (hardTimeoutFired && (errName === 'AbortError' || errName === 'APIUserAbortError')) {
+        throw new Error(
+          `LLM provider timed out after ${STREAM_TIMEOUT_MS / 1000}s (baseUrl=${this.baseUrl}, model=${this.model}). Try a smaller request or switch providers in Settings.`,
+        );
+      }
+      throw err;
     }
 
     // Stream completed normally — cancel the hard timeout

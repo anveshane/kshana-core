@@ -28,7 +28,8 @@
  * --cascade: explicit form of the default downstream walk.
  * --no-run:  reset only, exit without spawning run-to.
  */
-import { readFileSync, writeFileSync } from 'fs';
+import { readFileSync } from 'fs';
+import { atomicWriteFileSync } from '../src/utils/atomicWrite.js';
 import { join } from 'path';
 import { spawnSync } from 'child_process';
 import { loadProjectStrict, resolveNodeId, type ExecutionNode } from './cli-helpers.js';
@@ -200,7 +201,7 @@ function main() {
       lastInvalidatedIds?: string[];
     }).lastInvalidatedIds = lastInvalidatedIds;
   }
-  writeFileSync(projectJsonPath, JSON.stringify(obj, null, 2));
+  atomicWriteFileSync(projectJsonPath, JSON.stringify(obj, null, 2));
   if (surgicalLog) console.log(surgicalLog);
   console.log(`Wrote updated state to ${projectJsonPath}`);
 

@@ -234,11 +234,23 @@ export class BackgroundTaskRunner {
   /**
    * Cancel the active task. Returns `false` when nothing is running
    * or when `taskId` is provided but doesn't match.
+   *
+   * In addition to aborting the local controller (which propagates to
+   * the executor + LLM streams), this also fires POST /interrupt on
+   * every in-flight ComfyUI prompt the executor submitted. Without
+   * that step the local pipeline stops but the GPU job keeps running
+   * to completion, burning paid Cloud credits the user thinks they
+   * just reclaimed. See src/services/comfyui/activeJobs.ts.
    */
   cancel(taskId?: string): boolean {
     if (!this.active) return false;
     if (taskId && this.active.record.id !== taskId) return false;
     this.active.controller.abort();
+    // Fire-and-forget: interrupt does not need to complete before
+    // cancel() returns. Errors are swallowed inside cancelAllActiveJobs.
+    void import('../../services/comfyui/activeJobs.js').then(
+      ({ cancelAllActiveJobs }) => cancelAllActiveJobs(),
+    );
     return true;
   }
 

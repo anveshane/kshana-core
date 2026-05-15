@@ -3,6 +3,7 @@ import * as path from 'path';
 
 import { getCurrentSession, getSessionFs } from '../../../core/fs/index.js';
 import { getActiveProjectDir } from './activeProject.js';
+import { atomicWriteFileSync } from '../../../utils/atomicWrite.js';
 
 /**
  * Default basePath for project filesystem helpers. Reads
@@ -385,7 +386,7 @@ export function writeProjectText(
 
   const remoteFs = getRemoteProjectFs();
   if (!remoteFs) {
-    fs.writeFileSync(projectPath(normalizedRelative, basePath), content, 'utf-8');
+    atomicWriteFileSync(projectPath(normalizedRelative, basePath), content, 'utf-8');
     return;
   }
 
@@ -431,7 +432,7 @@ export function writeProjectBuffer(
 
   const remoteFs = getRemoteProjectFs();
   if (!remoteFs) {
-    fs.writeFileSync(projectPath(normalizedRelative, basePath), data);
+    atomicWriteFileSync(projectPath(normalizedRelative, basePath), data);
     return;
   }
 

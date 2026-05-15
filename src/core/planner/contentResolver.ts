@@ -13,6 +13,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import type { ExecutionNode, ResolvedInputs } from './types.js';
 import type { DependencyGraphExecutor } from './DependencyGraphExecutor.js';
+import { atomicWriteFileSync } from '../../utils/atomicWrite.js';
 
 /**
  * Safely read a file from a project directory.
@@ -256,6 +257,6 @@ export function writeOutput(
     fs.mkdirSync(parentDir, { recursive: true });
   }
 
-  fs.writeFileSync(fullPath, content, 'utf-8');
+  atomicWriteFileSync(fullPath, content, 'utf-8');
   return relativePath;
 }

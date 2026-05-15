@@ -5,6 +5,7 @@
  */
 import * as nodeFs from 'node:fs';
 import * as nodePath from 'node:path';
+import { atomicWriteFileSync } from '../utils/atomicWrite.js';
 import { v4 as uuidv4 } from 'uuid';
 import { defaultBasePath } from '../tasks/video/workflow/projectFileIO.js';
 import {
@@ -841,6 +842,36 @@ export class ConversationManager {
     return session?.state;
   }
 
+  /**
+   * Cross-project concurrency check. Returns the focusedProject slug of
+   * any OTHER session that is currently `running` AND bound to a
+   * different project than `currentFocusedProject`. Returns `null` when
+   * it's safe to start a new run in the caller's session.
+   *
+   * Why this matters: the pipeline's `setActiveProjectDir` is a
+   * process-global. Two sessions on different projects firing tasks at
+   * once would race on that global and silently corrupt each other's
+   * project.json. The JobManager serializes within a project; this
+   * guard adds the cross-project layer.
+   *
+   * Ambient sessions (no focusedProject) don't trigger the guard either
+   * direction — the agent can chat about projects without locking out
+   * generation work.
+   */
+  private findCrossProjectConflict(
+    currentSessionId: string,
+    currentFocusedProject: string | undefined,
+  ): string | null {
+    for (const [otherSessionId, other] of this.sessions.entries()) {
+      if (otherSessionId === currentSessionId) continue;
+      if (other.state.status !== 'running') continue;
+      if (!other.focusedProject) continue;
+      if (other.focusedProject === currentFocusedProject) continue;
+      return other.focusedProject;
+    }
+    return null;
+  }
+
   getSessionTimerState(sessionId: string): {
     elapsedMs: number;
     running: boolean;
@@ -1067,6 +1098,20 @@ export class ConversationManager {
 
     if (session.state.status === 'running') {
       throw new Error('Session already has a running task');
+    }
+
+    // Cross-project concurrency guard. kshana-core's pipeline reads a
+    // process-global `activeProjectDir` (see tasks/video/workflow/
+    // activeProject.ts); JobManager serializes per-project, but two
+    // sessions for DIFFERENT projects would race on the global and
+    // silently corrupt each other's project.json. Reject the second
+    // dispatch until the first finishes. Idle / same-project sessions
+    // pass through unchanged.
+    const conflict = this.findCrossProjectConflict(sessionId, session.focusedProject);
+    if (conflict) {
+      throw new Error(
+        `Another project ('${conflict}') has an active task. Cancel it before starting a new generation in this session.`,
+      );
     }
 
     // Pi-orchestrator chat works without a project being selected — the user
@@ -1584,6 +1629,19 @@ export class ConversationManager {
       session.abortController.abort();
     }
 
+    // Stop any ComfyUI prompts the executor submitted via POST /interrupt
+    // so the GPU job doesn't keep running (and billing) past the cancel.
+    // BackgroundTaskRunner.cancel() also fires this for runner-managed
+    // tasks; calling it from both paths is idempotent — interrupting an
+    // already-completed prompt is a no-op.
+    void import('../services/comfyui/activeJobs.js')
+      .catch(() => null)
+      .then((mod) => {
+        if (mod && typeof (mod as { cancelAllActiveJobs?: unknown }).cancelAllActiveJobs === 'function') {
+          (mod as { cancelAllActiveJobs: () => Promise<number> }).cancelAllActiveJobs();
+        }
+      });
+
     let backgroundCancelled = false;
     try {
       const runner = getBackgroundTaskRunner();
@@ -1681,7 +1739,7 @@ export class ConversationManager {
       project as Parameters<typeof applyInvalidation>[0],
       nodeIds,
     );
-    nodeFs.writeFileSync(
+    atomicWriteFileSync(
       projectJsonPath,
       JSON.stringify(project, null, 2),
       'utf-8',
@@ -1737,6 +1795,12 @@ export class ConversationManager {
     }
     if (session.state.status === 'running') {
       throw new Error('Session already has a running task — cannot redo while executing');
+    }
+    const conflict = this.findCrossProjectConflict(sessionId, session.focusedProject);
+    if (conflict) {
+      throw new Error(
+        `Another project ('${conflict}') has an active task. Cancel it before starting a new regeneration here.`,
+      );
     }
     // We need sessionContext to know where the project lives, but we do
     // NOT need session.agent — redoNode now runs the executor in-process
@@ -1869,7 +1933,7 @@ export class ConversationManager {
       applyInvalidation(projectLike, [nodeId], { cascade: true });
     }
 
-    nodeFs.writeFileSync(
+    atomicWriteFileSync(
       projectJsonPath,
       JSON.stringify(project, null, 2),
       'utf-8',

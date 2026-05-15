@@ -798,14 +798,15 @@ export class WebSocketHandler {
       // Store resolution in project.json
       if (data.resolution || data.resolutionWidth) {
         const { join } = await import('path');
-        const { readFileSync, writeFileSync } = await import('fs');
+        const { readFileSync } = await import('fs');
+        const { atomicWriteFileSync } = await import('../utils/atomicWrite.js');
         const projFile = join(process.cwd(), projectDirName, 'project.json');
         try {
           const projData = JSON.parse(readFileSync(projFile, 'utf-8'));
           projData.resolution = data.resolution || '480p';
           projData.resolutionWidth = data.resolutionWidth || 848;
           projData.resolutionHeight = data.resolutionHeight || 480;
-          writeFileSync(projFile, JSON.stringify(projData, null, 2));
+          atomicWriteFileSync(projFile, JSON.stringify(projData, null, 2));
         } catch { /* non-fatal */ }
       }
 

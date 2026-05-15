@@ -14,6 +14,7 @@ import { nanoid } from 'nanoid';
 import WebSocket from 'ws';
 import { decideWsAction, type ComfyWsMessage } from './wsAction.js';
 import { getLogsDir } from '../../utils/logsPath.js';
+import { registerActiveJob, unregisterActiveJob, type CancellableComfyJob } from './activeJobs.js';
 
 // Debug logging to file instead of console to avoid polluting Ink UI.
 //
@@ -420,6 +421,27 @@ export class ComfyUIClient {
     progressCallback?: ProgressCallback,
     pollInterval: number = 10
   ): Promise<CompletionResult> {
+    // Register the in-flight prompt so the cancel path can call
+    // POST /interrupt on this client and stop the GPU job. Always
+    // unregister in finally so completion / error / interrupt all
+    // clean up.
+    const cancelHandle: CancellableComfyJob = {
+      promptId,
+      interrupt: () => this.interrupt(),
+    };
+    registerActiveJob(cancelHandle);
+    try {
+      return await this.waitForCompletionInner(promptId, progressCallback, pollInterval);
+    } finally {
+      unregisterActiveJob(cancelHandle);
+    }
+  }
+
+  private async waitForCompletionInner(
+    promptId: string,
+    progressCallback?: ProgressCallback,
+    _pollInterval: number = 10
+  ): Promise<CompletionResult> {
     const startTime = Date.now();
 
     // Emit initial progress
@@ -521,7 +543,7 @@ export class ComfyUIClient {
         console.warn(`Failed to poll history: ${e}`);
       }
 
-      await this.sleep(pollInterval * 1000);
+      await this.sleep(_pollInterval * 1000);
     }
   }
 
@@ -770,6 +792,25 @@ export class ComfyUIClient {
    * Provides real-time step-by-step progress. Falls back to HTTP polling on WS failure.
    */
   async waitForCompletionWS(
+    promptId: string,
+    clientId: string,
+    progressCallback?: (info: WSProgressInfo) => void
+  ): Promise<CompletionResult> {
+    // Same active-jobs registration as the HTTP wait path so cancel
+    // reaches WS-tracked prompts too.
+    const cancelHandle: CancellableComfyJob = {
+      promptId,
+      interrupt: () => this.interrupt(),
+    };
+    registerActiveJob(cancelHandle);
+    try {
+      return await this.waitForCompletionWSInner(promptId, clientId, progressCallback);
+    } finally {
+      unregisterActiveJob(cancelHandle);
+    }
+  }
+
+  private async waitForCompletionWSInner(
     promptId: string,
     clientId: string,
     progressCallback?: (info: WSProgressInfo) => void
