@@ -8,7 +8,7 @@
  * decides which to reference based on the shot description.
  */
 
-import { readFileSync, existsSync } from 'fs';
+import { readFileSync, readdirSync, existsSync } from 'fs';
 import { join } from 'path';
 
 export interface AvailableRef {
@@ -424,7 +424,7 @@ export function readShotContextFromSvp(
   const settingsDir = join(projectDir, 'settings');
   const validSettings = existsSync(settingsDir)
     ? new Set(
-        require('fs').readdirSync(settingsDir).filter((f: string) => f.endsWith('.md')).map((f: string) => f.replace('.md', '')),
+        readdirSync(settingsDir).filter((f: string) => f.endsWith('.md')).map((f: string) => f.replace('.md', '')),
       )
     : new Set();
   let canonicalSetting: string | null = null;
