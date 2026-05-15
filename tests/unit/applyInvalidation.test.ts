@@ -392,4 +392,264 @@ describe("applyInvalidation", () => {
     };
     expect(cleared.outputPaths).toBeUndefined();
   });
+
+  // ──────────────────────────────────────────────────────────────────
+  // Graph-state edge cases — comprehensive coverage. These tests
+  // attack the cascade BFS with malformed / inconsistent graph state
+  // to make sure stale dependents arrays, cycles, phantom IDs, and
+  // duplicate edges don't break invalidation.
+  //
+  // Real-world bug that motivated this block: noir_detective_story_setup-3
+  // had `scene_shot_plan.dependents` truncated to only include the
+  // matching-scope dependent (scene_video_prompt:scene_N) — the
+  // shot_breakdown:scene_N_shot_M entries had been silently dropped at
+  // some point by an upstream dep-rewire pass. The user invalidated
+  // 'plot'; the cascade walked stale dependents and stopped before
+  // reaching shot_breakdown / shot_image_prompt / shot_video /
+  // final_video. The pipeline appeared to "skip from ref images to
+  // complete" because all the downstream shot work stayed in its
+  // prior completed state from a week earlier.
+  //
+  // Fix: applyInvalidation's Phase 0 rebuilds `dependents` from
+  // `dependencies` deterministically before the cascade BFS. These
+  // tests pin that invariant.
+  // ──────────────────────────────────────────────────────────────────
+
+  function makeChainProject(opts: {
+    staleDependents?: boolean;
+    cycle?: boolean;
+    phantomDependent?: boolean;
+    duplicateDependents?: boolean;
+    missingDependentsField?: boolean;
+  } = {}): ProjectFile {
+    const aDependents = opts.cycle ? ["B", "C"] : ["B"];
+    const bDependents = opts.staleDependents
+      ? []
+      : opts.duplicateDependents
+        ? ["C", "C", "C"]
+        : opts.phantomDependent
+          ? ["C", "ghost_node_that_does_not_exist"]
+          : ["C"];
+    const cDependents = opts.cycle ? ["A"] : [];
+    const baseNode = (id: string, deps: string[], dependents: string[]) => {
+      const node: Record<string, unknown> = {
+        id,
+        typeId: id === "A" ? "plot" : id === "B" ? "story" : "shot_breakdown",
+        displayName: id,
+        status: "completed",
+        dependencies: deps,
+        outputPath: `out/${id}.json`,
+        completedAt: 1_000_000_000_000,
+        startedAt: 1_000_000_000_000,
+      };
+      if (!opts.missingDependentsField || id !== "B") {
+        node.dependents = dependents;
+      }
+      return node;
+    };
+    return {
+      executorState: {
+        nodes: {
+          A: baseNode("A", [], aDependents) as never,
+          B: baseNode("B", ["A"], bDependents) as never,
+          C: baseNode("C", ["B"], cDependents) as never,
+        },
+      },
+    };
+  }
+
+  it("REGRESSION (noir-3): cascade reaches C even when B.dependents is stale (missing C)", () => {
+    const proj = makeChainProject({ staleDependents: true });
+    const result = applyInvalidation(proj, ["A"]);
+
+    // Without the Phase 0 rebuild, C stays completed because B's
+    // stale dependents array doesn't list it.
+    expect(result.invalidated.sort()).toEqual(["A", "B", "C"]);
+    expect(proj.executorState.nodes["C"]!.status).toBe("pending");
+    expect(proj.executorState.nodes["C"]!.outputPath).toBeUndefined();
+    expect(proj.executorState.nodes["C"]!.completedAt).toBeUndefined();
+  });
+
+  it("INVARIANT: after applyInvalidation, dependents is the deterministic inverse of dependencies", () => {
+    // Independent of cascade correctness — this property is what the
+    // Phase 0 rebuild establishes. Verify it directly so future
+    // regressions get caught even if cascade somehow accidentally
+    // "looks right" via other code paths.
+    const proj = makeChainProject({ staleDependents: true });
+    applyInvalidation(proj, ["A"]);
+
+    const nodes = proj.executorState.nodes;
+    for (const id of Object.keys(nodes)) {
+      const node = nodes[id]!;
+      for (const depId of node.dependencies) {
+        const dep = nodes[depId];
+        expect(dep).toBeDefined();
+        expect(dep!.dependents ?? []).toContain(id);
+      }
+    }
+    // And the converse: every entry in dependents corresponds to a
+    // real dependency edge from that node back to this one.
+    for (const id of Object.keys(nodes)) {
+      const node = nodes[id]!;
+      for (const depId of node.dependents ?? []) {
+        const dep = nodes[depId];
+        expect(dep).toBeDefined();
+        expect(dep!.dependencies).toContain(id);
+      }
+    }
+  });
+
+  it("handles a cycle (A→B→C→A) without infinite looping", () => {
+    const proj = makeChainProject({ cycle: true });
+    const result = applyInvalidation(proj, ["A"]);
+    expect(result.invalidated.sort()).toEqual(["A", "B", "C"]);
+    expect(proj.executorState.nodes["A"]!.status).toBe("pending");
+    expect(proj.executorState.nodes["B"]!.status).toBe("pending");
+    expect(proj.executorState.nodes["C"]!.status).toBe("pending");
+  });
+
+  it("ignores phantom dependent IDs (entries pointing at non-existent nodes)", () => {
+    const proj = makeChainProject({ phantomDependent: true });
+    const result = applyInvalidation(proj, ["A"]);
+    // Cascade reaches A, B, C — the phantom is silently skipped.
+    expect(result.invalidated.sort()).toEqual(["A", "B", "C"]);
+    expect(result.notFound).toEqual([]);
+  });
+
+  it("dedupes duplicate dependent edges (B.dependents = ['C','C','C'])", () => {
+    const proj = makeChainProject({ duplicateDependents: true });
+    const result = applyInvalidation(proj, ["A"]);
+    // Each node appears exactly once in invalidated.
+    expect(result.invalidated.filter(id => id === "C")).toHaveLength(1);
+    expect(result.invalidated.sort()).toEqual(["A", "B", "C"]);
+  });
+
+  it("handles nodes that lack a dependents field entirely", () => {
+    const proj = makeChainProject({ missingDependentsField: true });
+    // B has no `dependents` key on its node. The rebuild populates
+    // it from C's dependencies — cascade still reaches C.
+    const result = applyInvalidation(proj, ["A"]);
+    expect(result.invalidated.sort()).toEqual(["A", "B", "C"]);
+    // After the rebuild, B.dependents is now an array containing C.
+    expect(proj.executorState.nodes["B"]!.dependents).toBeDefined();
+    expect(proj.executorState.nodes["B"]!.dependents).toContain("C");
+  });
+
+  it("cascade with cascadeOnlyCompleted=true: stops at non-completed dependents", () => {
+    // B.status = 'pending' (not completed). With cascadeOnlyCompleted,
+    // the cascade skips it and doesn't descend to C.
+    const proj: ProjectFile = {
+      executorState: {
+        nodes: {
+          A: {
+            id: "A",
+            typeId: "plot",
+            status: "completed",
+            dependencies: [],
+            dependents: ["B"],
+            outputPath: "out/A.json",
+          } as never,
+          B: {
+            id: "B",
+            typeId: "story",
+            status: "pending",  // <-- not completed
+            dependencies: ["A"],
+            dependents: ["C"],
+          } as never,
+          C: {
+            id: "C",
+            typeId: "shot_breakdown",
+            status: "completed",
+            dependencies: ["B"],
+            dependents: [],
+            outputPath: "out/C.json",
+          } as never,
+        },
+      },
+    };
+    const result = applyInvalidation(proj, ["A"], { cascadeOnlyCompleted: true });
+    // A is seed → pending. B is not completed → cascade skips it.
+    // C is not reached because cascade didn't descend through B.
+    expect(result.invalidated).toEqual(["A"]);
+    expect(proj.executorState.nodes["B"]!.status).toBe("pending"); // unchanged
+    expect(proj.executorState.nodes["C"]!.status).toBe("completed"); // unchanged
+  });
+
+  it("cascade=false: only seed nodes are invalidated", () => {
+    const proj = makeChainProject();
+    const result = applyInvalidation(proj, ["A"], { cascade: false });
+    expect(result.invalidated).toEqual(["A"]);
+    expect(proj.executorState.nodes["A"]!.status).toBe("pending");
+    expect(proj.executorState.nodes["B"]!.status).toBe("completed");
+    expect(proj.executorState.nodes["C"]!.status).toBe("completed");
+  });
+
+  it("multi-seed with overlapping cascades dedupes via shared seen set", () => {
+    // Seed both A and B — B is also reachable from A. Should still
+    // produce exactly one entry per node in `invalidated`.
+    const proj = makeChainProject();
+    const result = applyInvalidation(proj, ["A", "B"]);
+    const uniqueIds = new Set(result.invalidated);
+    expect(uniqueIds.size).toBe(result.invalidated.length);
+    expect(result.invalidated.sort()).toEqual(["A", "B", "C"]);
+  });
+
+  it("REGRESSION (real noir-3 scenario): plot → 4-deep chain with stale dependents at intermediate node", () => {
+    // Reproduces the exact shape of the noir bug: plot → scene →
+    // scene_shot_plan → shot_breakdown chain where scene_shot_plan's
+    // dependents was truncated (missing shot_breakdown).
+    const proj: ProjectFile = {
+      executorState: {
+        nodes: {
+          plot: {
+            id: "plot",
+            typeId: "plot",
+            status: "completed",
+            dependencies: [],
+            dependents: ["scene:scene_1"],
+            outputPath: "plans/plot.md",
+            completedAt: 1000,
+          } as never,
+          "scene:scene_1": {
+            id: "scene:scene_1",
+            typeId: "scene",
+            status: "completed",
+            dependencies: ["plot"],
+            dependents: ["scene_shot_plan:scene_1"],
+            outputPath: "scenes/scene_1.md",
+            completedAt: 1000,
+          } as never,
+          "scene_shot_plan:scene_1": {
+            id: "scene_shot_plan:scene_1",
+            typeId: "scene_shot_plan",
+            status: "completed",
+            dependencies: ["scene:scene_1"],
+            // STALE — missing shot_breakdown:scene_1_shot_1 (the bug)
+            dependents: [],
+            outputPath: "plans/scene_1.plan.json",
+            completedAt: 1000,
+          } as never,
+          "shot_breakdown:scene_1_shot_1": {
+            id: "shot_breakdown:scene_1_shot_1",
+            typeId: "shot_breakdown",
+            status: "completed",
+            dependencies: ["scene_shot_plan:scene_1"],
+            dependents: [],
+            outputPath: "shots/1.json",
+            completedAt: 1778589351589, // May 12 — the stale render
+          } as never,
+        },
+      },
+    };
+
+    const result = applyInvalidation(proj, ["plot"]);
+
+    // ALL four nodes should be invalidated. Without the Phase 0
+    // rebuild, the cascade stops at scene_shot_plan because its
+    // stale dependents doesn't list shot_breakdown.
+    expect(result.invalidated).toContain("shot_breakdown:scene_1_shot_1");
+    expect(proj.executorState.nodes["shot_breakdown:scene_1_shot_1"]!.status).toBe("pending");
+    expect(proj.executorState.nodes["shot_breakdown:scene_1_shot_1"]!.completedAt).toBeUndefined();
+    expect(proj.executorState.nodes["shot_breakdown:scene_1_shot_1"]!.outputPath).toBeUndefined();
+  });
 });

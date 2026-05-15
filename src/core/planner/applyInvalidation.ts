@@ -144,6 +144,41 @@ export function applyInvalidation(
   const notFound: string[] = [];
   const seen = new Set<string>();
 
+  // Phase 0: rebuild `dependents` deterministically from `dependencies`.
+  // Without this, the cascade BFS below walks stale dependents arrays
+  // and silently stops short of downstream per-item nodes. Observed on
+  // noir_detective_story_setup-3: invalidating 'plot' cascaded through
+  // plot → story → scene → scene_shot_plan → scene_video_prompt but
+  // never reached shot_breakdown / shot_image_prompt / shot_video /
+  // final_video because scene_shot_plan.dependents had been truncated
+  // to only contain [scene_video_prompt:scene_1]. The pipeline appeared
+  // to "skip from ref images to complete" because all the downstream
+  // shot work stayed in its prior completed state.
+  //
+  // The ExecutorAgent's state-heal runs at run-start and would have
+  // fixed the dependents — but the cascade in this function runs
+  // BEFORE the executor starts, so the heal arrives too late. Doing
+  // an explicit inverse-rebuild here closes the timing gap. The
+  // inverse rebuild is also strictly safer than partial heals: a
+  // node's dependents IS the set of nodes whose `dependencies` list
+  // names it, by definition.
+  const allIds = Object.keys(nodes);
+  const newDependents: Record<string, string[]> = {};
+  for (const id of allIds) newDependents[id] = [];
+  for (const id of allIds) {
+    const node = nodes[id] as MutableNode | undefined;
+    if (!node) continue;
+    const deps = Array.isArray(node.dependencies) ? node.dependencies : [];
+    for (const depId of deps) {
+      if (!newDependents[depId]) newDependents[depId] = [];
+      if (!newDependents[depId].includes(id)) newDependents[depId].push(id);
+    }
+  }
+  for (const id of allIds) {
+    const node = nodes[id] as MutableNode | undefined;
+    if (node) node.dependents = newDependents[id] ?? [];
+  }
+
   // Phase 1: seed walk — mark each user-named id pending. The seed gets
   // the surgical-frame options; cascaded dependents in phase 2 always
   // get a full clear (their downstream contract is "regenerate this
