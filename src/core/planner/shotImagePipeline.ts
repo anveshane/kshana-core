@@ -115,6 +115,76 @@ function stripInlineFromImageTokens(prose: string): string {
 }
 
 /**
+ * Enforce the frozen-instant rule deterministically.
+ *
+ * The SCALIST shot_first_frame_guide and shot_last_frame_guide BAN a set
+ * of motion verbs (running, falling, crumbling, flickering, streaming,
+ * slipping, walking, "beginning to", "starting to", etc.) because they
+ * imply motion and break the single-frame assumption. DeepSeek follows
+ * most of the rule but consistently slips on a handful of cases —
+ * "flickering candle," "crumbling wall," "falling rain" — where the
+ * verb describes an inherently dynamic-looking *static* state.
+ *
+ * Rather than re-roll the LLM, normalize deterministically: replace each
+ * banned -ing form with a frozen-pose equivalent. The replacements are
+ * imperfect English in a few cases, but Flux ignores grammar and renders
+ * what's described — and the audit's banned-words check passes.
+ *
+ * Patterns are word-boundary case-insensitive. Phrases like "beginning
+ * to" and "starting to" are stripped entirely (they don't have a useful
+ * frozen form). The remaining -ing → frozen form mapping uses past
+ * participle / "mid-" prefixes where possible.
+ */
+const FROZEN_INSTANT_REPLACEMENTS: Array<[RegExp, string]> = [
+  // Phrasal verbs first — strip entire phrase.
+  [/\bbeginning to\s+/gi, ''],
+  [/\bstarting to\s+/gi, ''],
+  // Single banned -ing words → frozen forms.
+  [/\bflickering\b/gi, 'flame-lit'],
+  [/\bcrumbling\b/gi, 'crumbled'],
+  [/\bfalling\b/gi, 'mid-fall'],
+  [/\bstreaming\b/gi, 'streamed'],
+  [/\bslipping\b/gi, 'mid-slip'],
+  [/\bwalking\b/gi, 'mid-stride'],
+  [/\brunning\b/gi, 'mid-stride'],
+  [/\bsprinting\b/gi, 'mid-stride'],
+  [/\bdashing\b/gi, 'mid-dash'],
+  [/\bsmoldering\b/gi, 'smoke-stained'],
+  [/\bdrifting\b/gi, 'suspended'],
+  [/\bfloating\b/gi, 'suspended'],
+  [/\bsliding\b/gi, 'mid-slide'],
+  [/\bswinging\b/gi, 'mid-swing'],
+  [/\blunging\b/gi, 'mid-lunge'],
+  [/\bleaping\b/gi, 'mid-leap'],
+  [/\bcharging\b/gi, 'mid-charge'],
+  [/\bdodging\b/gi, 'angled aside'],
+  [/\bstumbling\b/gi, 'mid-stumble'],
+  [/\bscrambling\b/gi, 'mid-scramble'],
+  [/\berupting\b/gi, 'risen'],
+  [/\bexploding\b/gi, 'shattered'],
+  [/\bdissolving\b/gi, 'partially dissolved'],
+  [/\btransforming\b/gi, 'mid-transformation'],
+  [/\bcollapsing\b/gi, 'partially collapsed'],
+  [/\brecoiling\b/gi, 'recoiled'],
+  [/\bfleeing\b/gi, 'mid-flight'],
+  [/\bcrashing\b/gi, 'crashed'],
+  [/\bapproaching\b/gi, 'closer'],
+  [/\badvancing\b/gi, 'forward'],
+  [/\breceding\b/gi, 'distant'],
+  [/\bspinning\b/gi, 'mid-spin'],
+  [/\bspewing\b/gi, 'mid-spew'],
+];
+
+function enforceFrozenInstant(prose: string): string {
+  let out = prose;
+  for (const [pattern, replacement] of FROZEN_INSTANT_REPLACEMENTS) {
+    out = out.replace(pattern, replacement);
+  }
+  // Collapse any double-spaces left by phrasal-verb stripping.
+  return out.replace(/\s{2,}/g, ' ').trim();
+}
+
+/**
  * Assemble the final shot_image_prompt JSON from pipeline call outputs.
  * Always produces valid JSON matching the shotImagePromptSchema.
  *
@@ -132,8 +202,14 @@ export function assembleShotImagePrompt(input: AssembleInput): ShotImagePromptJs
   const strategy = input.generationStrategy === 'fmlfv' ? 'flfv' : input.generationStrategy;
 
   const manifestLine = buildSlotManifestLine(input.firstFrameRefs);
-  const firstFrameProse = stripInlineFromImageTokens(input.firstFramePrompt);
-  const lastFrameProse = stripInlineFromImageTokens(input.lastFramePrompt);
+  // Two deterministic post-LLM passes:
+  //   1. Strip inline "from image N" — slot binding is the manifest's job.
+  //   2. Enforce frozen-instant — replace banned motion verbs the LLM
+  //      slipped past the guide's ban list with frozen-pose equivalents.
+  // The order matters slightly: strip refs first (smaller change), then
+  // normalize verbs. Both are idempotent.
+  const firstFrameProse = enforceFrozenInstant(stripInlineFromImageTokens(input.firstFramePrompt));
+  const lastFrameProse = enforceFrozenInstant(stripInlineFromImageTokens(input.lastFramePrompt));
   const composed = (line: string, prose: string) => (line ? `${line}\n\n${prose}` : prose);
 
   return {
