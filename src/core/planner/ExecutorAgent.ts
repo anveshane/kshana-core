@@ -3672,6 +3672,36 @@ Examples of common failure modes to avoid:
       // Flux 4-slot contract: at most 4 refs, slot 1 = setting, no global
       // imageNumbers leaking in (which used to produce "from image 8" prose).
       const { refs: allRefs } = buildAvailableReferences(this.executor);
+
+      // Compute scene-canonical setting (most common setting across all
+      // shots in this scene). Used as a fallback when this shot's own
+      // focus doesn't name a setting — see ShotContext.canonicalSceneSetting.
+      let canonicalSceneSetting: string | null = null;
+      if (sceneId) {
+        const svpNode2 = this.executor.getNode(`scene_video_prompt:${sceneId}`);
+        if (svpNode2?.outputPath) {
+          try {
+            const svpPath2 = join(this.config.projectDir, svpNode2.outputPath);
+            if (existsSync(svpPath2)) {
+              let raw2 = readFileSync(svpPath2, 'utf-8').trim();
+              if (raw2.startsWith('```')) raw2 = raw2.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '');
+              const svp2 = JSON.parse(raw2);
+              const counts = new Map<string, number>();
+              for (const sh of svp2.shots ?? []) {
+                if (typeof sh?.setting === 'string' && sh.setting) counts.set(sh.setting, (counts.get(sh.setting) ?? 0) + 1);
+                const bg2 = Array.isArray(sh?.focus?.background) ? sh.focus.background : [];
+                for (const b of bg2) if (typeof b === 'string') counts.set(b, (counts.get(b) ?? 0) + 1);
+              }
+              const settingLabels = new Set(allRefs.filter(r => r.type === 'setting').map(r => r.label));
+              let bestN = 0;
+              for (const [refId, n] of counts.entries()) {
+                if (settingLabels.has(refId) && n > bestN) { canonicalSceneSetting = refId; bestN = n; }
+              }
+            }
+          } catch { /* keep null */ }
+        }
+      }
+
       const shotRefs = buildShotAwareReferences(allRefs, {
         mainSubject: sceneMainSubject,
         secondarySubject: sceneSecondarySubject,
@@ -3679,6 +3709,7 @@ Examples of common failure modes to avoid:
         focusBackground: shotFocusBackground,
         focusLurking: shotFocusLurking,
         purpose: shotPurpose,
+        canonicalSceneSetting,
       });
       referenceImageContext = formatReferencesForPrompt(shotRefs);
       this.log(`  Refs (shot-aware) for ${node.itemId}: ${allRefs.length} global → ${shotRefs.length} in-shot (purpose=${shotPurpose || 'unknown'})`);

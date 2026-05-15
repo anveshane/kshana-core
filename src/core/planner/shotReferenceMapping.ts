@@ -355,6 +355,15 @@ export interface ShotContext {
   /** Scene-level `entry` string — declared on the scene_video_prompt to
    *  signal a visual handoff from the previous scene's last frame. */
   sceneEntry?: string | null;
+  /** Canonical setting refId for this scene, computed by aggregating the
+   *  most-common setting across every shot's `focus.background` and
+   *  `shot.setting`. Used by buildShotAwareReferences as a fallback when
+   *  a specific shot's focus doesn't name a setting — for example
+   *  s2shot3's focus had only `owner` (a character), and without this
+   *  fallback the executor produced a slot manifest with no setting at
+   *  all, forcing Flux to invent the pawn-shop interior from scratch
+   *  shot to shot. Populated by readShotContextFromSvp. */
+  canonicalSceneSetting?: string | null;
 }
 
 /**
@@ -399,6 +408,34 @@ export function readShotContextFromSvp(
   const shot = shots.find((s: any) => s?.shotNumber === shotNumber);
   if (!shot) return null;
 
+  // Compute the scene's canonical setting by aggregating across every
+  // shot — fallback for shots whose own focus doesn't name a setting.
+  const settingCounts = new Map<string, number>();
+  for (const s of shots) {
+    if (typeof s?.setting === 'string' && s.setting) {
+      settingCounts.set(s.setting, (settingCounts.get(s.setting) ?? 0) + 1);
+    }
+    const bg = Array.isArray(s?.focus?.background) ? s.focus.background : [];
+    for (const b of bg) {
+      if (typeof b === 'string') settingCounts.set(b, (settingCounts.get(b) ?? 0) + 1);
+    }
+  }
+  // Validate against on-disk setting files.
+  const settingsDir = join(projectDir, 'settings');
+  const validSettings = existsSync(settingsDir)
+    ? new Set(
+        require('fs').readdirSync(settingsDir).filter((f: string) => f.endsWith('.md')).map((f: string) => f.replace('.md', '')),
+      )
+    : new Set();
+  let canonicalSetting: string | null = null;
+  let bestN = 0;
+  for (const [refId, n] of settingCounts.entries()) {
+    if (validSettings.has(refId) && n > bestN) {
+      canonicalSetting = refId;
+      bestN = n;
+    }
+  }
+
   const focus = shot.focus ?? {};
   return {
     mainSubject: parsed?.mainSubject ?? '',
@@ -410,6 +447,7 @@ export function readShotContextFromSvp(
     perspective: shot.perspective ?? '',
     continuityRole: shot.continuityRole ?? 'none',
     sceneEntry: typeof parsed?.entry === 'string' ? parsed.entry : null,
+    canonicalSceneSetting: canonicalSetting,
   };
 }
 
@@ -480,6 +518,18 @@ export function buildShotAwareReferences(
       }
     }
   }
+  // Canonical-scene-setting fallback: when this shot's focus didn't name
+  // a setting (e.g. focus.primary is a character and focus.background
+  // contains only other characters), fall back to the scene's most-common
+  // setting. Prevents shots from rendering with no setting ref at all,
+  // which forces Flux to invent the location and breaks shot-to-shot
+  // visual continuity. See s2shot3 in the bharata Ruby render: focus
+  // had only `owner` (a character), so without this fallback the prompt
+  // shipped with three character refs and no pawn-shop reference.
+  if (!chosenSetting && shot.canonicalSceneSetting) {
+    const r = byLabel.get(shot.canonicalSceneSetting);
+    if (r?.type === 'setting') chosenSetting = r;
+  }
 
   // Atmosphere / cutaway / insert shot guard. When the shot has NO
   // character references anywhere (focus.primary isn't a known character
@@ -526,8 +576,21 @@ export function buildShotAwareReferences(
     picked.push(r);
   };
 
-  pushIfChar(shot.mainSubject);
-  pushIfChar(shot.secondarySubject);
+  // Shot-aware character inclusion: only include the scene's mainSubject /
+  // secondarySubject in the slot picks if they're actually in THIS shot's
+  // focus. A scene-level mainSubject who walks off-screen for a beat
+  // shouldn't keep a permanent slot — that displaces the actual focal
+  // character. See the s2shot3 bug from the bharata Ruby render: Ruby
+  // (mainSubject) and Angel (secondarySubject) both got slots even though
+  // only Ruby was in focus.primary and `owner` was in focus.background;
+  // owner got squeezed out and the rendered shot replaced him with Angel.
+  const inFocus = new Set<string>();
+  if (shot.focusPrimary) inFocus.add(shot.focusPrimary);
+  for (const b of focusBg) inFocus.add(b);
+  if (shot.focusLurking) inFocus.add(shot.focusLurking);
+
+  if (shot.mainSubject && inFocus.has(shot.mainSubject)) pushIfChar(shot.mainSubject);
+  if (shot.secondarySubject && inFocus.has(shot.secondarySubject)) pushIfChar(shot.secondarySubject);
   pushIfChar(shot.focusPrimary);
   for (const name of focusBg) pushIfChar(name);
   pushIfChar(shot.focusLurking ?? undefined);

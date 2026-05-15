@@ -19,6 +19,35 @@ If this shot needs an entity that isn't in `<available_refs>`, describe it by pr
 
 ---
 
+## Character Identity Preservation — CRITICAL
+
+Every character has a profile file (e.g. `characters/angel.md`) that establishes their immutable identity: gender, age, ethnicity, physical features, name. **You MUST preserve this identity exactly** — particularly gender and pronouns — in every shot you write for that character.
+
+**The bug to avoid:** the LLM sometimes pattern-matches the scene's genre (heist with female mainSubject → "Thelma & Louise") and drifts the pronouns of secondary characters to match the dominant gender of the scene. This is a hallucination — the character profile takes precedence over genre intuition, always.
+
+### Rules
+
+1. **Pronouns must match the profile.** If the character profile says "Black African male, his loyalty, he betrays Ruby," every pronoun referring to that character in your `description`, `cameraWork`, and `audio` must be `he` / `him` / `his`. Never `she` / `her` / `hers`.
+
+2. **Never write "both women" / "both men" / "the women" / "the men"** without verifying every character in the group matches that gender per their profile. Mixed-gender groups must be written as such ("Ruby and Angel," "the pair," "the couple").
+
+3. **When in doubt, use the refId or the proper noun.** Writing "Angel kicks the door open, Angel sweeps the room with the gun" is clunky but correct. Writing "She kicks the door open" when Angel is male is a content bug that propagates through the entire pipeline.
+
+4. **The mainSubject's gender does NOT override secondary characters.** Scene 2's mainSubject may be Ruby (female), but Angel remains male per his profile.
+
+### Pre-output pronoun audit — RUN BEFORE OUTPUTTING
+
+For every character refId mentioned in this shot's `description`, `cameraWork`, or `audio`:
+
+1. Open their profile (already in your context as `<available_refs>` or the linked character file).
+2. Note their declared gender / pronouns.
+3. Scan your prose: every pronoun within ~10 words of that character's name or refId must match the profile.
+4. If mismatched, REWRITE — use the proper noun, the refId, or the correct pronoun.
+
+If you find yourself writing "she" or "her" for a male character (or "he" / "him" for a female character), stop and rewrite the entire sentence. The error compounds — once you flip a pronoun, the LLM tends to keep using the wrong one in subsequent shots.
+
+---
+
 ## Reference cap per shot — 4 maximum
 
 Across the union of references this shot pulls in via `focus.primary`, `focus.background[]`, `focus.lurking` (plus the scene-level `mainSubject` / `secondarySubject` when they appear in this shot), a single shot must reference at most 4 distinct entities. The image generator has 4 reference slots total. Slot 1 is reserved for the setting (the base canvas). Drop priority when over: extra settings first (keep one), then non-mainSubject characters, then the secondary subject. Never put a character in `focus.background[]` purely as decoration — it costs a slot.
@@ -209,6 +238,7 @@ Before returning JSON:
 10. **`continuityRole`** matches the plan's hint when set; otherwise default `none`
 11. **OTS framing** never paired with a single-character shot — use `insert` / `extreme_close_up` / `close_up` instead
 12. **Bharata tags preserved from Stage A** — if the plan entry for this shot includes `sattvika`, `drishti`, or `vyabhichariBhava`, copy them through into the expanded shot JSON. You MAY add or refine these tags when the expanded prose makes them obviously appropriate, but you MUST NOT silently drop tags Stage A set.
+13. **Pronouns match the character profile** — for every character refId mentioned in `description` / `cameraWork` / `audio`, the pronouns within ~10 words of their name must match the gender declared in their character profile. Never write `she` / `her` for a male character (or vice versa) because the scene's mainSubject is the opposite gender. Re-roll the sentence using the proper noun if you find a mismatch.
 
 ---
 
