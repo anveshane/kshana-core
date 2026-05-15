@@ -116,16 +116,36 @@ function computeResetTypes(startType: string): string[] {
 const COLLECTION_TYPES = new Set([
   'character', 'setting', 'object', 'scene',
   'character_image', 'setting_image', 'object_image',
-  'scene_video_prompt', 'shot_image_prompt', 'shot_motion_directive', 'shot_image', 'shot_video',
+  // Hierarchical breakdown collections — scene_shot_plan + shot_breakdown
+  // were missing from this set, so reset never recreated their type-level
+  // collection nodes. After a reset to plot, the graph had no
+  // scene_shot_plan or shot_breakdown nodes at all → expansion never
+  // produced per-items → downstream collections (scene_video_prompt and
+  // everything below) had no matching upstream and got marked skipped
+  // via the unreachable-cascade sweep. Observed on noir-3 today:
+  // pipeline ran plot → story → characters/settings/scenes → ref images
+  // and then stalled at 20/26 because the shot pipeline had nothing to
+  // build from. See ExecutorAgent.ts:5158 cascade for the symptom.
+  'scene_shot_plan', 'shot_breakdown',
+  'scene_video_prompt', 'shot_image_prompt', 'shot_motion_directive',
+  // shot_image_last_frame is also a per-shot collection; reset must
+  // recreate its type-level node so the executor can expand it.
+  'shot_image', 'shot_image_last_frame', 'shot_video',
 ]);
 
 const MATCHING_SOURCE: Record<string, string[]> = {
   'scene_video_prompt': ['scene'],
   'character_image': ['character'],
   'setting_image': ['setting'],
+  // Same omission as COLLECTION_TYPES — without these entries, the
+  // resetProjectStage post-recreate sweep doesn't know which upstream
+  // matching-type to wire scene_shot_plan / shot_breakdown to.
+  'scene_shot_plan': ['scene'],
+  'shot_breakdown': ['scene'],
   'shot_image_prompt': ['scene'],
   'shot_motion_directive': ['shot_image_prompt', 'scene'],
   'shot_image': ['shot_image_prompt', 'scene'],
+  'shot_image_last_frame': ['shot_image_prompt', 'scene'],
   'shot_video': ['shot_image', 'shot_motion_directive', 'shot_image_prompt', 'scene'],
 };
 
