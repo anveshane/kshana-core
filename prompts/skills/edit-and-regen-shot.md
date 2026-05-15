@@ -53,19 +53,40 @@ shot or frame** — not for project-wide stylistic changes (those need
 4. **Write the file back** with `write` (or `edit` if it's a small
    targeted change). The new JSON must remain valid.
 
-5. **Trigger the regen** with `kshana_invalidate` + `kshana_run_to`:
-   - `kshana_invalidate node=shot_image:scene_<N>_shot_<M>` then
-     `kshana_run_to scope='last_invalidated'` — regenerates just that
-     image (uses the new prompt; produces fresh first+last frames).
-   - `kshana_invalidate node=shot_video:scene_<N>_shot_<M>` then
-     `kshana_run_to scope='last_invalidated'` — regenerates the video
-     (uses the new motion directive over the existing frames).
+5. **Trigger the regen** with `kshana_invalidate` + `kshana_run_to`.
 
+   **Principle: you wrote it → don't invalidate it. Invalidate the
+   consumer instead.** Every node represents an LLM call that produces
+   a file. Invalidating a node re-runs that LLM, which writes a fresh
+   file and overwrites whatever you just wrote. To force downstream
+   regeneration of the things that *consume* your hand-written file,
+   invalidate the consumer node(s) — not the node whose file you
+   touched.
+
+   File you just wrote → invalidate this consumer:
+
+   | You wrote                                          | Invalidate                            | Don't invalidate (producer)               |
+   |----------------------------------------------------|----------------------------------------|--------------------------------------------|
+   | `prompts/images/shots/scene-N-shot-M.json` (imagePrompt) | `shot_image:scene_N_shot_M`            | `shot_image_prompt:scene_N_shot_M`         |
+   | `prompts/motion/scene_N_shot_M.json`               | `shot_video:scene_N_shot_M`            | `shot_motion_directive:scene_N_shot_M`     |
+   | A first / last / mid frame PNG (hand-replaced)     | `shot_video:scene_N_shot_M`            | `shot_image:…` / `shot_image_last_frame:…` |
+
+   After invalidating, run `kshana_run_to scope='last_invalidated'`.
    The regenerated asset surfaces as a media card in the chat as it
    lands on disk — you don't need to call `kshana_show_*` after.
 
 ## What NOT to do
 
+- **Don't invalidate the node whose file you just wrote.** That node's
+  producer is an LLM; invalidating it makes the executor re-run that
+  LLM on the next dispatch, which writes a fresh file and silently
+  overwrites your text. If you wrote
+  `prompts/motion/scene_N_shot_M.json` and then call
+  `kshana_invalidate node=shot_motion_directive:scene_N_shot_M`, your
+  motion directive will be gone by the time the video renders. Use the
+  consumer-mapping table in step 5 — for a hand-written motion
+  directive, invalidate `shot_video:…`; the video re-renders from your
+  text and the directive file stays untouched.
 - **Don't stage the new prompt in a sidecar / `_new` / `.draft` file.**
   The pipeline reads the canonical filename only — anything you write
   to `scene-<N>-shot-<M>_new.json` or similar is invisible to the
