@@ -207,6 +207,86 @@ for (const f of shotFiles) {
   }
 }
 
+// ── Layer 4a: Period anachronism scan ───────────────────────────────────────
+// If the input names an ancient/historical timeframe ("300bc", "ancient",
+// "BCE", "medieval", etc.), scan downstream artifacts for industrial- or
+// modern-era vocabulary that breaks the period. Closes the noir-3 bug:
+// the audit said "PASS on plot coherence" but world_style.md introduced
+// "ferry engine" and "corrugated iron" — both 19th-20th-century artifacts
+// that an LLM helping itself to noir genre conventions slipped in.
+const ANCIENT_HINTS = /\b(\d{1,4}\s*(bc|bce|ad)|ancient|antiquity|bronze[- ]age|iron[- ]age|classical|medieval|mughal|mauryan|gupta|magadhan|chola|vedic|hellenistic|sasanian|byzantine)\b/i;
+const ANACHRONISM_RX: Array<[RegExp, string]> = [
+  [/\bcorrugated iron\b/gi, 'corrugated iron (1820s+)'],
+  [/\bferry engine\b/gi, 'ferry engine'],
+  [/\bcombustion engine\b/gi, 'combustion engine'],
+  [/\bsteam engine\b/gi, 'steam engine'],
+  [/\b(diesel|petrol|gasoline)\b/gi, 'petroleum fuel'],
+  [/\b(neon|fluorescent) (sign|light|tube)\b/gi, 'electric-era lighting'],
+  [/\bskyscraper\b/gi, 'skyscraper'],
+  [/\bautomobile\b/gi, 'automobile'],
+  [/\bcellphone\b/gi, 'cellphone'],
+  [/\btelevision\b/gi, 'television'],
+  [/\b(revolver|pistol|firearm|rifle)\b/gi, 'firearm'],
+  [/\b(trench coat|trenchcoat)\b/gi, 'trench coat'],
+  [/\bsedan\b/gi, 'sedan'],
+  [/\b(laptop|computer)\b/gi, 'computer'],
+  [/\bplastic\b/gi, 'plastic'],
+  [/\bchrome\b/gi, 'chrome plating'],
+  [/\b(highway|tarmac|asphalt)\b/gi, 'paved road'],
+];
+const periodHinted = ANCIENT_HINTS.test(originalInput) || ANCIENT_HINTS.test(plot) || ANCIENT_HINTS.test(story);
+if (periodHinted) {
+  add({ layer: 'period', scope: 'input', severity: 'PASS', message: `period hint detected — running anachronism scan` });
+  const sources: Array<[string, string]> = [
+    ['plot', plot],
+    ['story', story],
+    ['world_style', worldStyle],
+  ];
+  // Add settings + characters
+  const settingsDir = join(projectRoot, 'settings');
+  if (existsSync(settingsDir)) {
+    for (const f of readdirSync(settingsDir).filter(x => x.endsWith('.md'))) {
+      sources.push([`settings/${f.replace('.md','')}`, readFileSync(join(settingsDir, f), 'utf-8')]);
+    }
+  }
+  const charsDir = join(projectRoot, 'characters');
+  if (existsSync(charsDir)) {
+    for (const f of readdirSync(charsDir).filter(x => x.endsWith('.md'))) {
+      sources.push([`characters/${f.replace('.md','')}`, readFileSync(join(charsDir, f), 'utf-8')]);
+    }
+  }
+  // Add shot prompt prose
+  const shotsDirInner = join(projectRoot, 'prompts/images/shots');
+  if (existsSync(shotsDirInner)) {
+    for (const f of readdirSync(shotsDirInner).filter(x => x.endsWith('.json'))) {
+      const jj = JSON.parse(readFileSync(join(shotsDirInner, f), 'utf-8'));
+      const ff = jj.frames?.first_frame?.imagePrompt ?? '';
+      const lf = jj.frames?.last_frame?.imagePrompt ?? '';
+      if (ff) sources.push([`shot/${f.replace('.json','')}:ff`, ff]);
+      if (lf) sources.push([`shot/${f.replace('.json','')}:lf`, lf]);
+    }
+  }
+  for (const [scope, src] of sources) {
+    if (!src) continue;
+    const hits: string[] = [];
+    for (const [rx, label] of ANACHRONISM_RX) {
+      // Skip "avoid" / "do not" / negative contexts where the anachronism is
+      // explicitly being suppressed (e.g. world_style: "Avoid: synthetic neon").
+      const matches = [...src.matchAll(rx)];
+      for (const m of matches) {
+        const idx = m.index ?? 0;
+        const before = src.slice(Math.max(0, idx - 50), idx).toLowerCase();
+        if (/\b(avoid|no |never|not |without|negative.?prompt)/.test(before)) continue;
+        hits.push(label);
+        break;
+      }
+    }
+    if (hits.length > 0) {
+      add({ layer: 'period', scope, severity: 'FAIL', message: `anachronism(s) for ancient setting: ${[...new Set(hits)].join(', ')}` });
+    }
+  }
+}
+
 // ── Layer 4: Plot/story coherence (keyword crosswalk) ───────────────────────
 function topicalOverlap(text: string): number {
   const lower = text.toLowerCase();

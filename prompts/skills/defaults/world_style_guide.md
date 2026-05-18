@@ -1,5 +1,27 @@
 **PURPOSE**: Define the visual and auditory world of this project in one document. This "style bible" ensures every shot, image, and video in the project shares a consistent look and feel.
 
+## PERIOD ACCURACY — HARD CONSTRAINT
+
+If the plot / story / user input names a historical period (e.g. "300 BC", "Mauryan", "Mughal", "Vedic", "Iron Age", "Renaissance", "medieval", "Victorian", "ancient Rome"), every visual and auditory element you describe must be appropriate to that era. Treat the period as immovable; do not let modern noir / cinematic genre conventions drift you into post-period artifacts.
+
+Anachronism cheat sheet — DO NOT introduce these in a pre-industrial setting:
+- **Industrial materials**: corrugated iron (1820+), galvanized steel, plate glass, concrete, asphalt, plastic, chrome, aluminum, sheet rubber.
+- **Mechanical/electric tech**: engines (steam, combustion, electric, ferry, motorcycle), generators, fluorescent / neon / LED light, fans, refrigerators, cameras, phones, radios, televisions, computers, microphones, loudspeakers.
+- **Modern firearms**: revolvers, pistols, rifles, bullets, gunpowder weapons (gunpowder only reached widespread use ~14th c. CE in Asia; absent from 300 BC).
+- **Modern transportation**: automobiles, trains, paved highways, motorcycles, motorboats, helicopters, airplanes.
+- **Modern apparel/accessories**: trench coats, sneakers, jeans, T-shirts, hoodies, fedoras, sunglasses, wristwatches, ballpoint pens.
+- **Sound world specifics**: anything mechanical, motorized, or amplified.
+
+Period-appropriate substitutes (examples for ancient India / 300 BC):
+- Roof material: thatch, palm-frond, fired-clay tile, reed mat, stone slab — NOT corrugated iron.
+- Boat sound: wooden oar against hull (*dhak-dhak*), ferryman's chant, sail flapping — NOT engine *dhak-dhak*.
+- Light source: oil lamps, iron torches, hearth fire, tandoor coals, moonlight — NOT electric, neon, fluorescent.
+- Apparel: dhoti, sari, uttariya (shoulder cloth), turban, ghagra, kurta, bare feet, leather sandals — NOT trench coats, hoodies, modern footwear.
+- Weapons: sword, dagger, spear, bow, mace, chakram — NOT firearms.
+- Containers: clay pot, copper vessel, brass jug, leaf cup, palm-leaf scroll — NOT plastic, glass bottles, paper notebooks.
+
+The plot and story already encode the era through their named locations and objects. Read them carefully and let those details anchor every choice you write here. When in doubt, ground in archaeologically attested materials and practices from the named period.
+
 ---
 
 ## What To Produce
